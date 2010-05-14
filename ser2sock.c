@@ -12,7 +12,7 @@
 *
 *  This file is provided "AS IS" with NO WARRANTY OF ANY KIND,
 *  INCLUDING THE WARRANTIES OF DESIGN, MERCHANTABILITY AND FITNESS FOR
-*  A PARTICULAR PURPOSE. Trolltech reserves all rights not expressly
+*  A PARTICULAR PURPOSE. Nu Tech reserves all rights not expressly
 *  granted herein.
 *
 *  This file is provided AS IS with NO WARRANTY OF ANY KIND, INCLUDING THE
@@ -48,18 +48,32 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <string.h>
+#include <errno.h>
 
-
-//#include <sys/stat.h>
-//#include <time.h>
-//#include <unistd.h>
-//#include <sys/poll.h>
 
 #define SER2SOCK_VERSION "V1.0"
 #define TRUE 1
 #define FALSE 0
 typedef int BOOL;
 #define MAXCONNECTIONS 10
+#define MAX_FIFO_BUFFERS 30
+
+/* <Structures> */
+ 
+typedef struct
+{
+  int size,in,out,avail;
+  void **table;
+} fifo;
+
+typedef struct  {
+  int inuse;
+  int listening;
+  int socket;
+  fifo send_buffer;
+} Socket;
+
+/* </Structures> */
 
 /* <Prototypes> */
 int init_listen_socket();
@@ -69,17 +83,18 @@ void show_help();
 int init_system();
 void error(char *msg);
 int kbhit();
-void add_socket(int socket,int listening);
+int add_socket(int socket,int listening);
+int msleep(unsigned long milisec);
+
+// fifo buffer stuff
+void  fifo_init(fifo *f, int size);
+void  fifo_destroy(fifo *f);
+int   fifo_empty(fifo *f);
+int   fifo_add(fifo *f,void *next);
+void* fifo_get(fifo *f);
+void fifo_clear(fifo *f);
 /* </Prototypes> */
 
-
-/* <Structures */
-typedef struct  {
-  int inuse;
-  int listening;
-  int socket;
-} Socket;
-/* </Structures> */
 
 /* <Globals> */
 // soon to be params or config values
@@ -87,13 +102,15 @@ int listen_port = 10001;
 int socket_timeout = 10;
 int listen_backlog = 10;
 Socket my_sockets[MAXCONNECTIONS];
-
 // our fdsets
 fd_set read_set, write_set;
 // our listen socket */
 int listen_sock_fd=-1;
 struct sockaddr_in serv_addr;
 struct sockaddr_in peer_addr;
+// fifo buffer 
+fifo data_buffer;
+
 /* </Globals> */
 
 
@@ -105,6 +122,32 @@ void error(char *msg)
     perror(msg);
     exit(1);
 }
+
+/* nanosecond seleep */
+int __nsleep(const struct timespec *req, struct timespec *rem)
+{
+    struct timespec temp_rem;
+    if(nanosleep(req,rem)==-1)
+        __nsleep(rem,&temp_rem);
+    else
+        return 1;
+}
+
+/* 
+ sleep for N miliseconds 
+*/
+int msleep(unsigned long milisec)
+{
+    struct timespec req={0},rem={0};
+    time_t sec=(int)(milisec/1000);
+    milisec=milisec-(sec*1000);
+    req.tv_sec=sec;
+    req.tv_nsec=milisec*1000000L;
+    __nsleep(&req,&rem);
+    return 1;
+}
+
+
 
 /* 
  show help info 
@@ -131,7 +174,19 @@ int init_system() {
     my_sockets[x].inuse=FALSE;
     my_sockets[x].socket=-1;
     my_sockets[x].listening=FALSE;
+    fifo_init(&my_sockets[x].send_buffer,MAX_FIFO_BUFFERS);
   }
+}
+
+/*
+ clear all memeor used before we exit
+*/
+int free_system() {
+  int x;
+  for(x=0;x<MAXCONNECTIONS;x++) {
+    cleanup_socket(x);
+    fifo_destroy(&my_sockets[x].send_buffer);
+  }  
 }
 
 /*
@@ -191,19 +246,33 @@ void set_non_blocking(int socket) {
 /*
  Add a socket to our array so we can process it in our loop
 */
-void add_socket(int socket,int listening) {
+int add_socket(int socket,int listening) {
   int x;
-  for(x=-0;x<MAXCONNECTIONS;x++) {
+  int results=-1;
+  for(x=0;x<MAXCONNECTIONS;x++) {
       if(my_sockets[x].inuse==FALSE) {
 	printf("adding socket at %i\n",x);
 	my_sockets[x].inuse=TRUE;
 	my_sockets[x].socket=socket;
 	my_sockets[x].listening=listening;
+	results=x;
 	break;
       }
   }
+  
+  return results;
 }
 
+int cleanup_socket(int n) {
+  if(my_sockets[n].inuse) {
+  /* close the socket */
+    close(my_sockets[n].socket);
+  /* clear any data we have saved */
+    fifo_clear(&my_sockets[n].send_buffer);
+  /* mark the element as free for reuse */
+    my_sockets[n].inuse=FALSE;
+  }
+}
 
 /*
   this loop processes all of our sockets
@@ -211,61 +280,94 @@ void add_socket(int socket,int listening) {
 void listen_loop() {
      int clilen;
      int newsockfd;
+     int added_id;
+     char *tempbuffer;
      char buffer[256];
-     int n,fd_count;
-     fd_set sockArrayTemp;
+     int n,fd_count,received;
+     fd_set read_fdset,write_fdset;
+     clilen = sizeof(struct sockaddr_in);     
+     struct timeval wait;
 
 
 	  
      printf("Start wait loop\n");
      while(!kbhit()) {
         fd_count=0;
-	
-        /* add all sockets to our fdset */
-	FD_ZERO(&sockArrayTemp);
-	printf(".\n");
+	/* add all sockets to our fdset */
+	FD_ZERO(&read_fdset);
+	FD_ZERO(&write_fdset);
 	for(n=0;n<MAXCONNECTIONS;n++) {
 	    if(my_sockets[n].inuse==TRUE) {
-	      FD_SET(my_sockets[n].socket,&sockArrayTemp);
+	      FD_SET(my_sockets[n].socket,&read_fdset);
+	      FD_SET(my_sockets[n].socket,&write_fdset);
 	      fd_count++;
-	    }
+	    }	    
 	}
-	printf("waiting on %i sockets\n",fd_count);
+
+	/* lets not block our select and bail after 20us */
+        wait.tv_sec = 0;
+        wait.tv_usec = 20;
+
 	/* see if any sockets need service */
-	n=select(FD_SETSIZE,&sockArrayTemp,NULL,NULL,NULL);
+	n=select(FD_SETSIZE,&read_fdset,&write_fdset,0,&wait);
 	if(n==-1) {
-	    printf("socket error\n"); 
+	    printf("socket error\n");
         } else {
-	    printf("A\n");
 	    /* check every socket to find the one that needs service */
 	    for(n=0;n<MAXCONNECTIONS;n++) {
 	        if(my_sockets[n].inuse==TRUE) {
-		   printf("found inuse socket at %i\n",n);
-		   if(FD_ISSET(my_sockets[n].socket,&sockArrayTemp)) {
-		      printf("service socket %i at location %i\n",my_sockets[n].socket,n);     
-		   }
+		    
+		    /* check read fd */
+		    if(FD_ISSET(my_sockets[n].socket,&read_fdset)) {
+			/* if this is a listening socket then we accept on it and get a new client socket */
+			if(my_sockets[n].listening) { 
+				newsockfd = accept(listen_sock_fd,(struct sockaddr *) &peer_addr,&clilen);
+				if(newsockfd!=-1) {
+				    added_id=add_socket(newsockfd,FALSE);
+				    if(added_id>=0) {
+					printf("socket connected\n");
+					/* adding anything to the fifo must be malloced */
+					tempbuffer=strdup("!SER2SOCK Connected\r\n");
+					fifo_add(&my_sockets[added_id].send_buffer,tempbuffer);
+				    }
+				}
+			} else {
+			  errno=0;
+			  received = recv(my_sockets[n].socket, buffer, sizeof(buffer), 0);
+			  buffer[received] = 0;
+			  printf("Message from socket: %i '%s'\n", received, buffer);
+			  if(received==0) {
+			    printf("closing socket errno: %i\n", errno);
+			    cleanup_socket(n);
+			  }
+			}			  
+		    } else {
+			//printf("socket rx/tx or error\n");
+		    }
+		    
+		    /* check write fd */
+		    if(FD_ISSET(my_sockets[n].socket,&write_fdset)) {
+			if(!fifo_empty(&my_sockets[n].send_buffer)) {
+			    tempbuffer=(char *)fifo_get(&my_sockets[n].send_buffer);
+			    send(my_sockets[n].socket,tempbuffer,strlen(tempbuffer),0);
+			    free(tempbuffer);
+			} else {
+			   //printf("nothing to send\n");
+			}
+		    }		   
 		}
 	    }	  
 	}
        
-	usleep(100);
+	msleep(20);
      }
 
-     clilen = sizeof(struct sockaddr_in);     
-     newsockfd = accept(listen_sock_fd, 
-                 (struct sockaddr *) &peer_addr, 
-                 &clilen);
 	
-     printf("test\n");
-		 
-     if (newsockfd < 0) 
-          error("ERROR on accept");
-     bzero(buffer,256);
-     n = read(newsockfd,buffer,255);
-     if (n < 0) error("ERROR reading from socket");
-     printf("Here is the message: %s\n",buffer);
-     n = write(newsockfd,"I got your message",18);
-     if (n < 0) error("ERROR writing to socket");
+     printf("exiting\n");
+     
+     
+     free_system();
+
 }
 
 
@@ -321,3 +423,81 @@ int kbhit(void)
 
   return 0;
 }
+
+//<Fifo Buffer>
+
+/*
+ init queue allocate memory 
+*/
+void fifo_init (fifo *f,int size) {
+   f->avail=0; f->in=0;f->out=0;
+   f->size=size;
+   f->table=(void**)malloc(f->size*sizeof(void*));
+}
+
+/* 
+ fifo empty if queue = 1 else 0 
+*/
+int fifo_empty(fifo *f) {
+   return(f->avail==0);
+}
+
+/* 
+ free up any memory we allocated 
+*/
+void fifo_destroy(fifo *f) {
+   int i;
+   if(!fifo_empty(f)) free(f->table);
+   else{
+        for(i=f->out;i<f->in;i++){
+	    /* free actual block of memory */
+            free(f->table[i]);
+        }
+        free(f->table);
+   }
+}
+
+/* 
+ remove all stored pending data 
+*/
+void fifo_clear(fifo *f) {
+  int done=FALSE;
+  void *p;
+  while(!fifo_empty(f)) {
+    p=fifo_get(f);
+    if(p) free(p);
+  }
+}
+
+/* 
+ insert an element 
+ this must be already allocated with malloc or strdup
+*/
+int fifo_add(fifo *f,void *next) {
+   if(f->avail==f->size) {
+     return(0);
+   } else {
+       f->table[f->in]=next;
+       f->avail++;
+       f->in=(f->in+1)%f->size;
+       return(1);
+   }   
+}
+
+/* 
+ return next element 
+*/
+void* fifo_get(fifo *f){
+   void* get;
+   if (f->avail>0) {
+       get=f->table[f->out];
+       f->out=(f->out+1)%f->size;
+       f->avail--;
+       return(get);
+   } 
+   return 0;
+}   
+
+
+
+//</Fifo Buffer>
