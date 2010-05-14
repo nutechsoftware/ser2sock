@@ -47,6 +47,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <string.h>
 
 
 //#include <sys/stat.h>
@@ -68,6 +69,7 @@ void show_help();
 int init_system();
 void error(char *msg);
 int kbhit();
+void add_socket(int socket,int listening);
 /* </Prototypes> */
 
 
@@ -193,9 +195,11 @@ void add_socket(int socket,int listening) {
   int x;
   for(x=-0;x<MAXCONNECTIONS;x++) {
       if(my_sockets[x].inuse==FALSE) {
+	printf("adding socket at %i\n",x);
 	my_sockets[x].inuse=TRUE;
 	my_sockets[x].socket=socket;
 	my_sockets[x].listening=listening;
+	break;
       }
   }
 }
@@ -208,11 +212,43 @@ void listen_loop() {
      int clilen;
      int newsockfd;
      char buffer[256];
-     int n;
-     
+     int n,fd_count;
+     fd_set sockArrayTemp;
+
+
+	  
      printf("Start wait loop\n");
      while(!kbhit()) {
-       usleep(100);
+        fd_count=0;
+	
+        /* add all sockets to our fdset */
+	FD_ZERO(&sockArrayTemp);
+	printf(".\n");
+	for(n=0;n<MAXCONNECTIONS;n++) {
+	    if(my_sockets[n].inuse==TRUE) {
+	      FD_SET(my_sockets[n].socket,&sockArrayTemp);
+	      fd_count++;
+	    }
+	}
+	printf("waiting on %i sockets\n",fd_count);
+	/* see if any sockets need service */
+	n=select(FD_SETSIZE,&sockArrayTemp,NULL,NULL,NULL);
+	if(n==-1) {
+	    printf("socket error\n"); 
+        } else {
+	    printf("A\n");
+	    /* check every socket to find the one that needs service */
+	    for(n=0;n<MAXCONNECTIONS;n++) {
+	        if(my_sockets[n].inuse==TRUE) {
+		   printf("found inuse socket at %i\n",n);
+		   if(FD_ISSET(my_sockets[n].socket,&sockArrayTemp)) {
+		      printf("service socket %i at location %i\n",my_sockets[n].socket,n);     
+		   }
+		}
+	    }	  
+	}
+       
+	usleep(100);
      }
 
      clilen = sizeof(struct sockaddr_in);     
