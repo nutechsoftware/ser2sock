@@ -34,6 +34,8 @@
 *  REV INFO: ver 1.0 05/08/10
 *
 *
+* notes
+*  http://www.comptechdoc.org/os/linux/programming/c/linux_pgcserial.html
 \******************************************************************************/
 #include <stdint.h>
 #include <stdlib.h>
@@ -92,7 +94,7 @@ void set_non_blocking(int fd);
 void listen_loop();
 void show_help();
 int init_system();
-void error(char *msg);
+void error(char *msg,...);
 int kbhit();
 int add_fd(int fd,int fd_type);
 int msleep(unsigned long milisec);
@@ -128,7 +130,7 @@ fifo data_buffer;
 /* 
  show our error message and die 
 */
-void error(char *msg)
+void error(char *msg,...)
 {
     perror(msg);
     exit(1);
@@ -245,7 +247,32 @@ int init_listen_socket_fd() {
 /*
   Init serial port and add fd to our list of sockets
 */
-int init_serial_port() {
+int init_serial_port(char * szPortPath) {
+  struct termios oldtio, newtio;
+
+  long BAUD;                      // derived baud rate from command line
+  long DATABITS;
+  long STOPBITS;
+  long PARITYON;
+  long PARITY;
+  int Data_Bits = 8;              // Number of data bits
+  int Stop_Bits = 1;              // Number of stop bits
+  int Parity = 0;                 // Parity as follows:
+
+  int fd = open(szPortPath, O_RDWR | O_NOCTTY | O_NONBLOCK);
+  
+  BAUD=B38400;DATABITS = CS8;STOPBITS = 0;PARITYON = 0;PARITY = 0;
+
+  if(fd<0) 
+     error("cant open com port at %s\n",szPortPath);
+  
+  tcgetattr(fd,&oldtio); // save current port settings 
+  newtio.c_cflag = BAUD | CRTSCTS | DATABITS | STOPBITS | PARITYON | PARITY | CLOCAL | CREAD;
+  tcsetattr(fd,TCSANOW,&newtio);
+
+  add_fd(fd,SERIAL);
+  
+  return 1;
 }
 
 /* 
