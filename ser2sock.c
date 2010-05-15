@@ -58,6 +58,12 @@ typedef int BOOL;
 #define MAXCONNECTIONS 10
 #define MAX_FIFO_BUFFERS 30
 
+enum FD_TYPES {
+  LISTEN_SOCKET = 1,
+  CLIENT_SOCKET,
+  SERIAL
+} fd_types;
+
 /* <Structures> */
  
 typedef struct
@@ -67,23 +73,28 @@ typedef struct
 } fifo;
 
 typedef struct  {
+  /* flags */
   int inuse;
-  int listening;
-  int socket;
+  int fd_type;
+  
+  /* the fd */
+  int fd;
+  
+  /* the buffer */
   fifo send_buffer;
-} Socket;
+} FDs;
 
 /* </Structures> */
 
 /* <Prototypes> */
-int init_listen_socket();
-void set_non_blocking(int socket);
+int init_listen_socket_fd();
+void set_non_blocking(int fd);
 void listen_loop();
 void show_help();
 int init_system();
 void error(char *msg);
 int kbhit();
-int add_socket(int socket,int listening);
+int add_fd(int fd,int fd_type);
 int msleep(unsigned long milisec);
 
 // fifo buffer stuff
@@ -101,7 +112,7 @@ void fifo_clear(fifo *f);
 int listen_port = 10001;
 int socket_timeout = 10;
 int listen_backlog = 10;
-Socket my_sockets[MAXCONNECTIONS];
+FDs my_fds[MAXCONNECTIONS];
 // our fdsets
 fd_set read_set, write_set;
 // our listen socket */
@@ -171,10 +182,10 @@ void showHelp(const char *appName)
 int init_system() {
   int x;
   for(x=0;x<MAXCONNECTIONS;x++) {
-    my_sockets[x].inuse=FALSE;
-    my_sockets[x].socket=-1;
-    my_sockets[x].listening=FALSE;
-    fifo_init(&my_sockets[x].send_buffer,MAX_FIFO_BUFFERS);
+    my_fds[x].inuse=FALSE;
+    my_fds[x].fd=-1;
+    my_fds[x].fd_type=LISTEN_SOCKET;
+    fifo_init(&my_fds[x].send_buffer,MAX_FIFO_BUFFERS);
   }
 }
 
@@ -184,15 +195,15 @@ int init_system() {
 int free_system() {
   int x;
   for(x=0;x<MAXCONNECTIONS;x++) {
-    cleanup_socket(x);
-    fifo_destroy(&my_sockets[x].send_buffer);
+    cleanup_fd(x);
+    fifo_destroy(&my_fds[x].send_buffer);
   }  
 }
 
 /*
  Initialize our listening socket and related api's
 */
-int init_listen_socket() {
+int init_listen_socket_fd() {
     BOOL bOptionTrue=TRUE;
     int res;
     
@@ -200,7 +211,7 @@ int init_listen_socket() {
     FD_ZERO(&read_set);
     FD_ZERO(&write_set);
     
-    /* create a listening socket */
+    /* create a listening socket fd */
     listen_sock_fd = socket(AF_INET, SOCK_STREAM,0);
     if (listen_sock_fd < 0) 
        error("ERROR creating our listening socket");
@@ -226,35 +237,40 @@ int init_listen_socket() {
     
      set_non_blocking(listen_sock_fd);
   
-     add_socket(listen_sock_fd,TRUE);
+     add_fd(listen_sock_fd,LISTEN_SOCKET);
     
      return TRUE;
 }
 
+/*
+  Init serial port and add fd to our list of sockets
+*/
+int init_serial_port() {
+}
 
 /* 
  Makes a socket non blocking 
 */
-void set_non_blocking(int socket) {
+void set_non_blocking(int fd) {
   int nonb = 0;
   int res = 1;
   nonb |= O_NONBLOCK;
-  if (ioctl(socket, FIONBIO, &res) < 0)
+  if (ioctl(fd, FIONBIO, &res) < 0)
     error("ERROR setting FIONBIO failed\n");
 }
 
 /*
  Add a socket to our array so we can process it in our loop
 */
-int add_socket(int socket,int listening) {
+int add_fd(int fd,int fd_type) {
   int x;
   int results=-1;
   for(x=0;x<MAXCONNECTIONS;x++) {
-      if(my_sockets[x].inuse==FALSE) {
-	printf("adding socket at %i\n",x);
-	my_sockets[x].inuse=TRUE;
-	my_sockets[x].socket=socket;
-	my_sockets[x].listening=listening;
+      if(my_fds[x].inuse==FALSE) {
+	printf("adding fd at %i\n",x);
+	my_fds[x].inuse=TRUE;
+	my_fds[x].fd_type=fd_type;
+	my_fds[x].fd=fd;
 	results=x;
 	break;
       }
@@ -263,19 +279,19 @@ int add_socket(int socket,int listening) {
   return results;
 }
 
-int cleanup_socket(int n) {
-  if(my_sockets[n].inuse) {
-  /* close the socket */
-    close(my_sockets[n].socket);
+int cleanup_fd(int n) {
+  if(my_fds[n].inuse) {
+  /* close the fd */
+    close(my_fds[n].fd);
   /* clear any data we have saved */
-    fifo_clear(&my_sockets[n].send_buffer);
+    fifo_clear(&my_fds[n].send_buffer);
   /* mark the element as free for reuse */
-    my_sockets[n].inuse=FALSE;
+    my_fds[n].inuse=FALSE;
   }
 }
 
 /*
-  this loop processes all of our sockets
+  this loop processes all of our fds'
 */
 void listen_loop() {
      int clilen;
@@ -297,9 +313,9 @@ void listen_loop() {
 	FD_ZERO(&read_fdset);
 	FD_ZERO(&write_fdset);
 	for(n=0;n<MAXCONNECTIONS;n++) {
-	    if(my_sockets[n].inuse==TRUE) {
-	      FD_SET(my_sockets[n].socket,&read_fdset);
-	      FD_SET(my_sockets[n].socket,&write_fdset);
+	    if(my_fds[n].inuse==TRUE) {
+	      FD_SET(my_fds[n].fd,&read_fdset);
+	      FD_SET(my_fds[n].fd,&write_fdset);
 	      fd_count++;
 	    }	    
 	}
@@ -315,30 +331,34 @@ void listen_loop() {
         } else {
 	    /* check every socket to find the one that needs service */
 	    for(n=0;n<MAXCONNECTIONS;n++) {
-	        if(my_sockets[n].inuse==TRUE) {
+	        if(my_fds[n].inuse==TRUE) {
 		    
 		    /* check read fd */
-		    if(FD_ISSET(my_sockets[n].socket,&read_fdset)) {
+		    if(FD_ISSET(my_fds[n].fd,&read_fdset)) {
 			/* if this is a listening socket then we accept on it and get a new client socket */
-			if(my_sockets[n].listening) { 
+			if(my_fds[n].fd_type==LISTEN_SOCKET) { 
 				newsockfd = accept(listen_sock_fd,(struct sockaddr *) &peer_addr,&clilen);
 				if(newsockfd!=-1) {
-				    added_id=add_socket(newsockfd,FALSE);
+				    added_id=add_fd(newsockfd,CLIENT_SOCKET);
 				    if(added_id>=0) {
 					printf("socket connected\n");
 					/* adding anything to the fifo must be malloced */
 					tempbuffer=strdup("!SER2SOCK Connected\r\n");
-					fifo_add(&my_sockets[added_id].send_buffer,tempbuffer);
+					fifo_add(&my_fds[added_id].send_buffer,tempbuffer);
 				    }
 				}
 			} else {
-			  errno=0;
-			  received = recv(my_sockets[n].socket, buffer, sizeof(buffer), 0);
-			  buffer[received] = 0;
-			  printf("Message from socket: %i '%s'\n", received, buffer);
-			  if(received==0) {
-			    printf("closing socket errno: %i\n", errno);
-			    cleanup_socket(n);
+			  if(my_fds[n].fd_type==SERIAL) {
+			    printf("serial data\n");
+			  } else {
+			    errno=0;
+			    received = recv(my_fds[n].fd, buffer, sizeof(buffer), 0);
+			    buffer[received] = 0;
+			    printf("Message from socket: %i '%s'\n", received, buffer);
+			    if(received==0) {
+			      printf("closing socket errno: %i\n", errno);
+			      cleanup_fd(n);
+			    }
 			  }
 			}			  
 		    } else {
@@ -346,10 +366,10 @@ void listen_loop() {
 		    }
 		    
 		    /* check write fd */
-		    if(FD_ISSET(my_sockets[n].socket,&write_fdset)) {
-			if(!fifo_empty(&my_sockets[n].send_buffer)) {
-			    tempbuffer=(char *)fifo_get(&my_sockets[n].send_buffer);
-			    send(my_sockets[n].socket,tempbuffer,strlen(tempbuffer),0);
+		    if(FD_ISSET(my_fds[n].fd,&write_fdset)) {
+			if(!fifo_empty(&my_fds[n].send_buffer)) {
+			    tempbuffer=(char *)fifo_get(&my_fds[n].send_buffer);
+			    send(my_fds[n].fd,tempbuffer,strlen(tempbuffer),0);
 			    free(tempbuffer);
 			} else {
 			   //printf("nothing to send\n");
@@ -386,7 +406,7 @@ int main(int argc, char *argv[])
      init_system();
      
      /* initialize our listening socket */
-     if(!init_listen_socket()) {
+     if(!init_listen_socket_fd()) {
 	error("ERROR initializing listen socket\n");
      }
 
