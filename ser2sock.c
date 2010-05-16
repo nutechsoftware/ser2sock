@@ -25,17 +25,15 @@
 *
 *  FUNCTIONS: Too many to list
 *
-*  COMMENTS:
-*
+*  COMMENTS: to build from a shell prompt use cc as follows
+*    user@host:~> cc -o ser2sock ser2sock.c
 *
 *
 *  DEVELOPED BY: Sean Mathews
+*                  http://www.nutech.com/
 *
 *  REV INFO: ver 1.0 05/08/10
 *
-*
-* notes
-*  http://www.comptechdoc.org/os/linux/programming/c/linux_pgcserial.html
 \******************************************************************************/
 #include <stdint.h>
 #include <stdlib.h>
@@ -45,7 +43,6 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <sys/ioctl.h>
-
 #include <termios.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -60,13 +57,15 @@ typedef int BOOL;
 #define MAXCONNECTIONS 10
 #define MAX_FIFO_BUFFERS 30
 
-char * fd_type_strings[] = {"","LISTEN","CLIENT","SERIAL"};
+/* <Types and Constants> */
+const char * fd_type_strings[] = {"","LISTEN","CLIENT","SERIAL"};
 
 enum FD_TYPES {
   LISTEN_SOCKET = 1,
   CLIENT_SOCKET,
   SERIAL
 } fd_types;
+/* </Types and Constantes> */
 
 /* <Structures> */
  
@@ -113,6 +112,7 @@ int   fifo_add(fifo *f,void *next);
 void* fifo_get(fifo *f);
 void fifo_clear(fifo *f);
 void add_to_all_socket_fds(char * message);
+void add_to_serial_fd(char * message);
 /* </Prototypes> */
 
 
@@ -131,9 +131,9 @@ struct sockaddr_in serv_addr;
 struct sockaddr_in peer_addr;
 // fifo buffer 
 fifo data_buffer;
-
 /* </Globals> */
 
+/* <Code> */
 
 /* 
  show our error message and die 
@@ -145,7 +145,9 @@ void error(char *msg,...)
     exit(1);
 }
 
-/* nanosecond seleep */
+/* 
+ nanosecond seleep 
+*/
 int __nsleep(const struct timespec *req, struct timespec *rem)
 {
     struct timespec temp_rem;
@@ -168,8 +170,6 @@ int msleep(unsigned long milisec)
     __nsleep(&req,&rem);
     return 1;
 }
-
-
 
 /* 
  show help info 
@@ -292,6 +292,9 @@ int init_serial_fd(char * szPortPath) {
   return 1;
 }
 
+/*
+ prints out the specific serial fd terminal flags  
+*/
 void print_serial_fd_status(int fd) {
         int status;
         unsigned int arg;
@@ -337,6 +340,9 @@ int add_fd(int fd,int fd_type) {
   return results;
 }
 
+/*
+ Cleanup an entry in the fd array and do any fd_type specific cleanup 
+*/
 int cleanup_fd(int n) {
 
   /* dont do anything unless its in was active */
@@ -437,10 +443,12 @@ void listen_loop() {
 			    errno=0;
 			    received = recv(my_fds[n].fd, buffer, sizeof(buffer), 0);
 			    buffer[received] = 0;
-			    fprintf(stderr,"Message from socket: %i '%s'\n", received, buffer);
 			    if(received==0) {
 			      fprintf(stderr,"closing socket errno: %i\n", errno);
 			      cleanup_fd(n);
+			    } else {
+			      add_to_serial_fd(buffer);
+			      fprintf(stderr,"Message from socket: %i '%s'\n", received, buffer);
 			    }
 			  }
 			}			  
@@ -450,7 +458,11 @@ void listen_loop() {
 		    if(FD_ISSET(my_fds[n].fd,&write_fdset) ) {
 			if(!fifo_empty(&my_fds[n].send_buffer)) {
 			    tempbuffer=(char *)fifo_get(&my_fds[n].send_buffer);
-			    send(my_fds[n].fd,tempbuffer,strlen(tempbuffer),0);
+			    if(my_fds[n].fd_type==CLIENT_SOCKET)
+			       send(my_fds[n].fd,tempbuffer,strlen(tempbuffer),0);
+			    if(my_fds[n].fd_type==SERIAL)
+			       write(my_fds[n].fd,tempbuffer,strlen(tempbuffer));
+ 
 			    free(tempbuffer);
 			} else {
 			   //printf("nothing to send\n");
@@ -492,6 +504,15 @@ void add_to_all_socket_fds(char * message) {
 		}	
 	}
 
+}
+
+/*
+ adds data to the serial fifo buffer should be at 0 ever time
+*/
+void add_to_serial_fd(char *message) {
+	char * tempbuffer;
+	tempbuffer=strdup(message);
+	fifo_add(&my_fds[0].send_buffer,tempbuffer);
 }
 
 /*
@@ -672,5 +693,4 @@ void* fifo_get(fifo *f){
 }   
 //</Fifo Buffer>
 
-
-
+/* </Code> */
