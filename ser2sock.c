@@ -60,6 +60,8 @@ typedef int BOOL;
 #define MAXCONNECTIONS 10
 #define MAX_FIFO_BUFFERS 30
 
+char * fd_type_strings[] = {"","LISTEN","CLIENT","SERIAL"};
+
 enum FD_TYPES {
   LISTEN_SOCKET = 1,
   CLIENT_SOCKET,
@@ -81,6 +83,9 @@ typedef struct  {
   
   /* the fd */
   int fd;
+
+  /* persistent settings */
+  struct termios oldtio;
   
   /* the buffer */
   fifo send_buffer;
@@ -89,16 +94,17 @@ typedef struct  {
 /* </Structures> */
 
 /* <Prototypes> */
+int init_system();
 int init_listen_socket_fd();
+int init_serial_fd(char *path);
 void set_non_blocking(int fd);
 void listen_loop();
-void show_help();
-int init_system();
 void error(char *msg,...);
 int kbhit();
 int add_fd(int fd,int fd_type);
 int msleep(unsigned long milisec);
-
+void show_help();
+void print_serial_fd_status(int fd);
 // fifo buffer stuff
 void  fifo_init(fifo *f, int size);
 void  fifo_destroy(fifo *f);
@@ -106,12 +112,14 @@ int   fifo_empty(fifo *f);
 int   fifo_add(fifo *f,void *next);
 void* fifo_get(fifo *f);
 void fifo_clear(fifo *f);
+void add_to_all_socket_fds(char * message);
 /* </Prototypes> */
 
 
 /* <Globals> */
 // soon to be params or config values
-int listen_port = 10001;
+char * serial_device_name=0;
+int listen_port = 10000;
 int socket_timeout = 10;
 int listen_backlog = 10;
 FDs my_fds[MAXCONNECTIONS];
@@ -129,6 +137,7 @@ fifo data_buffer;
 
 /* 
  show our error message and die 
+ todo: add params.
 */
 void error(char *msg,...)
 {
@@ -165,16 +174,13 @@ int msleep(unsigned long milisec)
 /* 
  show help info 
 */
-void showHelp(const char *appName)
+void show_help(const char *appName)
 {
-    fprintf(stderr, "Serial 2 Socket Relay version %s\n", SER2SOCK_VERSION);
-    if (error)
-        fprintf(stderr, "%s: %s\n", appName, error);
-
-    fprintf(stderr, "Usage: %s [options] <serial port dev>\n\n"
+    fprintf(stderr,"Usage: %s -p <socket listen port> -s <serial port dev>\n\n"
             "  -h, -help                 display this help and exit\n"
             "  -v, -version              display version\n"
             "  -p port                   socket port to listen on\n"
+            "  -s <serial device>        serial device ex /dev/ttyUSB0\n"
             "\n", appName);
 }
 
@@ -189,6 +195,10 @@ int init_system() {
     my_fds[x].fd_type=LISTEN_SOCKET;
     fifo_init(&my_fds[x].send_buffer,MAX_FIFO_BUFFERS);
   }
+    
+  /* clear our read and write sets */
+  FD_ZERO(&read_set);
+  FD_ZERO(&write_set);
 }
 
 /*
@@ -209,9 +219,6 @@ int init_listen_socket_fd() {
     BOOL bOptionTrue=TRUE;
     int res;
     
-    /* clear our read and write sets */
-    FD_ZERO(&read_set);
-    FD_ZERO(&write_set);
     
     /* create a listening socket fd */
     listen_sock_fd = socket(AF_INET, SOCK_STREAM,0);
@@ -240,16 +247,17 @@ int init_listen_socket_fd() {
      set_non_blocking(listen_sock_fd);
   
      add_fd(listen_sock_fd,LISTEN_SOCKET);
-    
+   
+     printf("Listening socket created on port %i\n",listen_port); 
      return TRUE;
 }
 
 /*
   Init serial port and add fd to our list of sockets
 */
-int init_serial_port(char * szPortPath) {
-  struct termios oldtio, newtio;
-
+int init_serial_fd(char * szPortPath) {
+  struct termios newtio;
+  int id;
   long BAUD;                      // derived baud rate from command line
   long DATABITS;
   long STOPBITS;
@@ -260,23 +268,46 @@ int init_serial_port(char * szPortPath) {
   int Parity = 0;                 // Parity as follows:
 
   int fd = open(szPortPath, O_RDWR | O_NOCTTY | O_NONBLOCK);
-  
-  BAUD=B38400;DATABITS = CS8;STOPBITS = 0;PARITYON = 0;PARITY = 0;
 
   if(fd<0) 
      error("cant open com port at %s\n",szPortPath);
-  
-  tcgetattr(fd,&oldtio); // save current port settings 
-  newtio.c_cflag = BAUD | CRTSCTS | DATABITS | STOPBITS | PARITYON | PARITY | CLOCAL | CREAD;
-  tcsetattr(fd,TCSANOW,&newtio);
 
-  add_fd(fd,SERIAL);
+  /* add it and get our strucutre */
+  id = add_fd(fd,SERIAL);
   
+  BAUD=B9600;
+
+  tcgetattr(fd,&my_fds[id].oldtio); // save current port settings
+
+  newtio.c_cflag = BAUD | CS8 | CLOCAL | CREAD;
+  newtio.c_iflag = IGNPAR;
+  newtio.c_oflag = 0;
+  newtio.c_lflag = 0;
+  newtio.c_cc[VMIN]=1;
+  newtio.c_cc[VTIME]=0;
+  tcflush(fd, TCIFLUSH);
+  tcsetattr(fd,TCSANOW,&newtio);
+  print_serial_fd_status(fd);
+
   return 1;
 }
 
+void print_serial_fd_status(int fd) {
+        int status;
+        unsigned int arg;
+        status = ioctl(fd, TIOCMGET, &arg);
+        fprintf(stderr,"Serial Status ");
+        if(arg & TIOCM_RTS) fprintf(stderr,"RTS ");
+        if(arg & TIOCM_CTS) fprintf(stderr,"CTS ");
+        if(arg & TIOCM_DSR) fprintf(stderr,"DSR ");
+        if(arg & TIOCM_CAR) fprintf(stderr,"DCD ");
+        if(arg & TIOCM_DTR) fprintf(stderr,"DTR ");
+        if(arg & TIOCM_RNG) fprintf(stderr,"RI ");
+        fprintf(stderr,"\r\n");
+}
+
 /* 
- Makes a socket non blocking 
+ Makes a fd non blocking after opening 
 */
 void set_non_blocking(int fd) {
   int nonb = 0;
@@ -287,14 +318,14 @@ void set_non_blocking(int fd) {
 }
 
 /*
- Add a socket to our array so we can process it in our loop
+ Add a fd to our array so we can process it in our loop
 */
 int add_fd(int fd,int fd_type) {
   int x;
   int results=-1;
   for(x=0;x<MAXCONNECTIONS;x++) {
       if(my_fds[x].inuse==FALSE) {
-	printf("adding fd at %i\n",x);
+	fprintf(stderr,"adding %s fd at %i\n",fd_type_strings[fd_type],x);
 	my_fds[x].inuse=TRUE;
 	my_fds[x].fd_type=fd_type;
 	my_fds[x].fd=fd;
@@ -307,13 +338,24 @@ int add_fd(int fd,int fd_type) {
 }
 
 int cleanup_fd(int n) {
+
+  /* dont do anything unless its in was active */
   if(my_fds[n].inuse) {
-  /* close the fd */
+
+    /* if this is a terminal or serial fd then restore its settings */
+    if(my_fds[n].fd_type=SERIAL) {
+ 	tcsetattr(my_fds[n].fd,TCSANOW,&my_fds[n].oldtio);
+    }
+
+    /* close the fd */
     close(my_fds[n].fd);
-  /* clear any data we have saved */
+
+    /* clear any data we have saved */
     fifo_clear(&my_fds[n].send_buffer);
-  /* mark the element as free for reuse */
+
+    /* mark the element as free for reuse */
     my_fds[n].inuse=FALSE;
+
   }
 }
 
@@ -325,7 +367,7 @@ void listen_loop() {
      int newsockfd;
      int added_id;
      char *tempbuffer;
-     char buffer[256];
+     char buffer[1024];
      int n,fd_count,received;
      fd_set read_fdset,write_fdset;
      clilen = sizeof(struct sockaddr_in);     
@@ -333,7 +375,7 @@ void listen_loop() {
 
 
 	  
-     printf("Start wait loop\n");
+     fprintf(stderr,"Start wait loop\n");
      while(!kbhit()) {
         fd_count=0;
 	/* add all sockets to our fdset */
@@ -342,7 +384,7 @@ void listen_loop() {
 	for(n=0;n<MAXCONNECTIONS;n++) {
 	    if(my_fds[n].inuse==TRUE) {
 	      FD_SET(my_fds[n].fd,&read_fdset);
-	      FD_SET(my_fds[n].fd,&write_fdset);
+  	      FD_SET(my_fds[n].fd,&write_fdset);
 	      fd_count++;
 	    }	    
 	}
@@ -354,7 +396,7 @@ void listen_loop() {
 	/* see if any sockets need service */
 	n=select(FD_SETSIZE,&read_fdset,&write_fdset,0,&wait);
 	if(n==-1) {
-	    printf("socket error\n");
+	    fprintf(stderr,"socket error\n");
         } else {
 	    /* check every socket to find the one that needs service */
 	    for(n=0;n<MAXCONNECTIONS;n++) {
@@ -368,7 +410,7 @@ void listen_loop() {
 				if(newsockfd!=-1) {
 				    added_id=add_fd(newsockfd,CLIENT_SOCKET);
 				    if(added_id>=0) {
-					printf("socket connected\n");
+					fprintf(stderr,"socket connected\n");
 					/* adding anything to the fifo must be malloced */
 					tempbuffer=strdup("!SER2SOCK Connected\r\n");
 					fifo_add(&my_fds[added_id].send_buffer,tempbuffer);
@@ -376,24 +418,36 @@ void listen_loop() {
 				}
 			} else {
 			  if(my_fds[n].fd_type==SERIAL) {
-			    printf("serial data\n");
+			    errno=0;
+			    while ((received = read(my_fds[n].fd, buffer, sizeof(buffer))) > 0)
+		   	    {
+			        if(received>0) {
+			          buffer[received] = 0;
+				  add_to_all_socket_fds(buffer);
+			          fprintf(stderr,"%s",buffer);
+			        } 
+			    }
+
+			    if(received<0) {
+				/*
+					todo: add error handeling  
+				*/
+			    }
 			  } else {
 			    errno=0;
 			    received = recv(my_fds[n].fd, buffer, sizeof(buffer), 0);
 			    buffer[received] = 0;
-			    printf("Message from socket: %i '%s'\n", received, buffer);
+			    fprintf(stderr,"Message from socket: %i '%s'\n", received, buffer);
 			    if(received==0) {
-			      printf("closing socket errno: %i\n", errno);
+			      fprintf(stderr,"closing socket errno: %i\n", errno);
 			      cleanup_fd(n);
 			    }
 			  }
 			}			  
-		    } else {
-			//printf("socket rx/tx or error\n");
-		    }
+		    } /* end FD_ISSET() 
 		    
 		    /* check write fd */
-		    if(FD_ISSET(my_fds[n].fd,&write_fdset)) {
+		    if(FD_ISSET(my_fds[n].fd,&write_fdset) ) {
 			if(!fifo_empty(&my_fds[n].send_buffer)) {
 			    tempbuffer=(char *)fifo_get(&my_fds[n].send_buffer);
 			    send(my_fds[n].fd,tempbuffer,strlen(tempbuffer),0);
@@ -409,29 +463,99 @@ void listen_loop() {
 	msleep(20);
      }
 
-	
-     printf("exiting\n");
-     
-     
+     fprintf(stderr,"\ncleaning up\n");
      free_system();
+
+     fprintf(stderr,"done.\n");
+     exit(1);
+}
+
+/* 
+ add_to_all_socket_fds 
+ adds a buffer to ever connected socket fd ie multiplexes
+*/
+void add_to_all_socket_fds(char * message) {
+
+	char * tempbuffer;
+	int n;
+
+	/* 
+            Adding anything to the fifo must be allocated so it can be free'd later
+           Not very efficient but we have plenty of mem with as few connections as we
+           will use. If we needed many more I would need to refactor how this works
+         */
+	for(n=0;n<MAXCONNECTIONS;n++) {
+		if(my_fds[n].fd_type==CLIENT_SOCKET) {
+			/* caller of fifo_get must free this */
+			tempbuffer=strdup(message);
+			fifo_add(&my_fds[n].send_buffer,tempbuffer);
+		}	
+	}
 
 }
 
+/*
+ parse_args
+*/
+int parse_args(int argc, char * argv[]) {
+
+	char **loc_argv=argv;
+	int loc_argc = argc;
+
+	while (loc_argc > 1) {	
+		if(loc_argv[1][0] == '-')
+		switch (loc_argv[1][1])
+		{
+			case 'h':
+				show_help(argv[0]);
+				exit(1);
+				break;
+			case 'p':
+				listen_port=atoi(&loc_argv[1][3]);
+				break;
+			case 's':
+				serial_device_name=&loc_argv[1][3];
+				break;
+			default:
+				show_help(argv[0]);
+				error("ERROR Wrong argument: %s\n", loc_argv[1]);
+				exit(1);
+		}
+
+		++loc_argv;
+		--loc_argc;
+	}
+
+	if(serial_device_name==0) {
+		show_help(argv[0]);
+		error("ERROR Missing serial device name\n");
+	}
+
+	return TRUE;
+}
 
 /*
  main()
 */
 int main(int argc, char *argv[])
 {
-     
+     /* startup banner and args check */
+     fprintf(stderr,"Serial 2 Socket Relay version %s\n", SER2SOCK_VERSION);
      if (argc < 2) {
-         fprintf(stderr,"ERROR, no port provided\n");
-         exit(1);
+        show_help(argv[0]); 
+	error("ERROR insufficient arguments\n");
+	exit(1);
      }
-     
+
+     /* parse args and set global vars as needed */ 
+     parse_args(argc,argv);
+    
      /* initialize the system */
      init_system();
-     
+
+     /* initialize the serial port */
+     init_serial_fd(serial_device_name);
+
      /* initialize our listening socket */
      if(!init_listen_socket_fd()) {
 	error("ERROR initializing listen socket\n");
@@ -443,36 +567,38 @@ int main(int argc, char *argv[])
      return 0; 
 }
 
-
+/* 
+ good old kbhit funciton just back in the day 
+*/
 int kbhit(void)
 {
-  struct termios oldt, newt;
-  int ch;
-  int oldf;
+   struct termios oldt, newt;
+   int ch;
+   int oldf;
 
-  tcgetattr(STDIN_FILENO, &oldt);
-  newt = oldt;
-  newt.c_lflag &= ~(ICANON | ECHO);
-  tcsetattr(STDIN_FILENO, TCSANOW, &newt);
-  oldf = fcntl(STDIN_FILENO, F_GETFL, 0);
-  fcntl(STDIN_FILENO, F_SETFL, oldf | O_NONBLOCK);
 
-  ch = getchar();
+   tcgetattr(STDIN_FILENO, &oldt);
+   newt = oldt;
+   newt.c_lflag &= ~(ICANON | ECHO);
+   tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+   oldf = fcntl(STDIN_FILENO, F_GETFL, 0);
+   fcntl(STDIN_FILENO, F_SETFL, oldf | O_NONBLOCK);
 
-  tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
-  fcntl(STDIN_FILENO, F_SETFL, oldf);
+   ch = getchar();
 
-  if(ch != EOF)
-  {
-    ungetc(ch, stdin);
-    return 1;
-  }
+   tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+   fcntl(STDIN_FILENO, F_SETFL, oldf);
 
-  return 0;
+   if(ch != EOF)
+   {
+     ungetc(ch, stdin);
+     return 1;
+   }
+
+   return 0;
 }
 
 //<Fifo Buffer>
-
 /*
  init queue allocate memory 
 */
@@ -508,12 +634,12 @@ void fifo_destroy(fifo *f) {
  remove all stored pending data 
 */
 void fifo_clear(fifo *f) {
-  int done=FALSE;
-  void *p;
-  while(!fifo_empty(f)) {
-    p=fifo_get(f);
-    if(p) free(p);
-  }
+   int done=FALSE;
+   void *p;
+   while(!fifo_empty(f)) {
+     p=fifo_get(f);
+     if(p) free(p);
+   }
 }
 
 /* 
@@ -544,7 +670,7 @@ void* fifo_get(fifo *f){
    } 
    return 0;
 }   
-
-
-
 //</Fifo Buffer>
+
+
+
