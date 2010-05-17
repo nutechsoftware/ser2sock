@@ -259,13 +259,6 @@ int init_serial_fd(char * szPortPath) {
   struct termios newtio;
   int id;
   long BAUD;                      // derived baud rate from command line
-  long DATABITS;
-  long STOPBITS;
-  long PARITYON;
-  long PARITY;
-  int Data_Bits = 8;              // Number of data bits
-  int Stop_Bits = 1;              // Number of stop bits
-  int Parity = 0;                 // Parity as follows:
 
   int fd = open(szPortPath, O_RDWR | O_NOCTTY | O_NONBLOCK);
 
@@ -274,9 +267,7 @@ int init_serial_fd(char * szPortPath) {
 
   /* add it and get our strucutre */
   id = add_fd(fd,SERIAL);
-  
   BAUD=B9600;
-#ifdef NORUN
   tcgetattr(fd,&my_fds[id].oldtio); // save current port settings
 
   newtio.c_cflag = BAUD | CS8 | CLOCAL | CREAD;
@@ -301,10 +292,8 @@ int init_serial_fd(char * szPortPath) {
   newtio.c_cc[VLNEXT]   = 0;     /* Ctrl-v */
   newtio.c_cc[VEOL2]    = 0;     /* '\0' */
 
-
   tcflush(fd, TCIFLUSH);
   tcsetattr(fd,TCSANOW,&newtio);
-#endif
   print_serial_fd_status(fd);
 
   return 1;
