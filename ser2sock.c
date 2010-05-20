@@ -32,7 +32,8 @@
 *  DEVELOPED BY: Sean Mathews
 *                  http://www.nutech.com/
 *
-*  REV INFO: ver 1.0 05/08/10
+*  REV INFO: ver 1.0 05/08/10 Initial releaes
+*		 1.1 05/18/10 Refining, looking for odd echo bug
 *
 \******************************************************************************/
 #include <stdint.h>
@@ -50,7 +51,7 @@
 #include <errno.h>
 
 
-#define SER2SOCK_VERSION "V1.1"
+#define SER2SOCK_VERSION "V1.1.4"
 #define TRUE 1
 #define FALSE 0
 typedef int BOOL;
@@ -101,6 +102,7 @@ void listen_loop();
 void error(char *msg,...);
 int kbhit();
 int add_fd(int fd,int fd_type);
+int __nsleep(const struct timespec *req, struct timespec *rem);
 int msleep(unsigned long milisec);
 void show_help();
 void print_serial_fd_status(int fd);
@@ -217,7 +219,6 @@ int free_system() {
 */
 int init_listen_socket_fd() {
     BOOL bOptionTrue=TRUE;
-    int res;
     
     
     /* create a listening socket fd */
@@ -257,8 +258,11 @@ int init_listen_socket_fd() {
 */
 int init_serial_fd(char * szPortPath) {
   struct termios newtio;
-  int id;
+  int id,x;
   long BAUD;                      // derived baud rate from command line
+
+  /* initialize all 0's */ 
+  memset ((void *) &newtio, 0, sizeof (struct termios));
 
   int fd = open(szPortPath, O_RDWR | O_NOCTTY | O_NONBLOCK);
 
@@ -270,10 +274,26 @@ int init_serial_fd(char * szPortPath) {
   BAUD=B9600;
   tcgetattr(fd,&my_fds[id].oldtio); // save current port settings
 
+  /* turn this stuff off */
+  newtio.c_lflag &= ~(ECHO | ECHONL | ICANON | IEXTEN | ISIG);
+  fprintf(stderr,"c_lflags old:%08x  new:%08x\n",my_fds[id].oldtio.c_lflag,newtio.c_lflag);
+
   newtio.c_cflag = BAUD | CS8 | CLOCAL | CREAD;
+  fprintf(stderr,"c_cflags old:%08x  new:%08x\n",my_fds[id].oldtio.c_cflag,newtio.c_cflag);
+
   newtio.c_iflag = IGNPAR;
+  fprintf(stderr,"c_iflags old:%08x  new:%08x\n",my_fds[id].oldtio.c_iflag,newtio.c_iflag);
+
   newtio.c_oflag = 0;
-  newtio.c_lflag = ICANON;
+  fprintf(stderr,"c_oflags old:%08x  new:%08x\n",my_fds[id].oldtio.c_oflag,newtio.c_oflag);
+
+  /* dump bytes out of old c_cc */
+  fprintf(stderr,"c_cc old: ");
+  for(x=0;x<sizeof(my_fds[id].oldtio.c_cc);x++) {
+	fprintf(stderr,"%02x:",my_fds[id].oldtio.c_cc[x]);
+  }
+  fprintf(stderr,"\n");
+
   newtio.c_cc[VINTR]    = 0;     /* Ctrl-c */ 
   newtio.c_cc[VQUIT]    = 0;     /* Ctrl-\ */
   newtio.c_cc[VERASE]   = 0;     /* del */
@@ -281,7 +301,12 @@ int init_serial_fd(char * szPortPath) {
   newtio.c_cc[VEOF]     = 4;     /* Ctrl-d */
   newtio.c_cc[VTIME]    = 0;     /* inter-character timer unused */
   newtio.c_cc[VMIN]     = 1;     /* blocking read until 1 character arrives */
-  newtio.c_cc[VSWTC]    = 0;     /* '\0' */
+# ifdef VSWTC
+  newtio.c_cc[VSWTC]    = 0;
+# endif
+# ifdef VSWTCH
+  newio.c_cc[VSWTCH]    = 0;
+# endif
   newtio.c_cc[VSTART]   = 0;     /* Ctrl-q */ 
   newtio.c_cc[VSTOP]    = 0;     /* Ctrl-s */
   newtio.c_cc[VSUSP]    = 0;     /* Ctrl-z */
@@ -291,6 +316,14 @@ int init_serial_fd(char * szPortPath) {
   newtio.c_cc[VWERASE]  = 0;     /* Ctrl-w */
   newtio.c_cc[VLNEXT]   = 0;     /* Ctrl-v */
   newtio.c_cc[VEOL2]    = 0;     /* '\0' */
+
+  /* dump bytes out of new c_cc */
+  fprintf(stderr,"c_cc new: ");
+  for(x=0;x<sizeof(newtio.c_cc);x++) {
+	fprintf(stderr,"%02x:",newtio.c_cc[x]);
+  }
+  fprintf(stderr,"\n");
+
 
   tcflush(fd, TCIFLUSH);
   tcsetattr(fd,TCSANOW,&newtio);
@@ -459,7 +492,7 @@ void listen_loop() {
 			    }
 			  }
 			}			  
-		    } /* end FD_ISSET() 
+		    } /* end FD_ISSET() */
 		    
 		    /* check write fd */
 		    if(FD_ISSET(my_fds[n].fd,&write_fdset) ) {
@@ -467,9 +500,10 @@ void listen_loop() {
 			    tempbuffer=(char *)fifo_get(&my_fds[n].send_buffer);
 			    if(my_fds[n].fd_type==CLIENT_SOCKET)
 			       send(my_fds[n].fd,tempbuffer,strlen(tempbuffer),0);
-			    if(my_fds[n].fd_type==SERIAL)
+			    if(my_fds[n].fd_type==SERIAL) {
+			       fprintf(stderr,"Sending '%s' to com port\n",tempbuffer);
 			       write(my_fds[n].fd,tempbuffer,strlen(tempbuffer));
- 
+ 			     }
 			    free(tempbuffer);
 			} else {
 			   //printf("nothing to send\n");
