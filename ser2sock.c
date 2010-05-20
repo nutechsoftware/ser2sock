@@ -32,8 +32,14 @@
 *  DEVELOPED BY: Sean Mathews
 *                  http://www.nutech.com/
 *
-*  REV INFO: ver 1.0 05/08/10 Initial releaes
-*		 1.1 05/18/10 Refining, looking for odd echo bug
+*	Thanks to Richard Perlman [rdp at yikes.com] for his help testing on  
+*     bsd and excellent feedback on features. Also a big thanks to everyone
+*     that helped support the AD2USB project get off the ground.
+*
+*  REV INFO: ver 1.0 05/08/10 Initial release
+*		 1.1 05/18/10 Refining, looking for odd echo bug thanks Richard!
+*		 1.2 05/19/10 Adding daemon mode, bind to ip, debug output 
+*                    syslog and more
 *
 \******************************************************************************/
 #include <stdint.h>
@@ -49,9 +55,11 @@
 #include <fcntl.h>
 #include <string.h>
 #include <errno.h>
+#include <syslog.h>
+#include <signal.h>
+#include <stdarg.h>
 
-
-#define SER2SOCK_VERSION "V1.1.4"
+#define SER2SOCK_VERSION "V1.2.1"
 #define TRUE 1
 #define FALSE 0
 typedef int BOOL;
@@ -60,13 +68,30 @@ typedef int BOOL;
 
 /* <Types and Constants> */
 const char * fd_type_strings[] = {"","LISTEN","CLIENT","SERIAL"};
-
 enum FD_TYPES {
   LISTEN_SOCKET = 1,
   CLIENT_SOCKET,
   SERIAL
 } fd_types;
-/* </Types and Constantes> */
+
+typedef struct {char *name; int flag; } speed_spec;
+speed_spec speeds[] =
+{
+	{"1200", B1200},
+	{"2400", B2400},
+	{"4800", B4800},
+	{"9600", B9600},
+	{"19200", B19200},
+	{"38400", B38400},
+	{"57600", B57600},
+	{"115200", B115200},
+	{NULL, 0}
+};
+
+#define DAEMON_NAME "ser2sock"
+#define PID_FILE "/var/run/ser2sock.pid"
+
+/* </Types and Constants> */
 
 /* <Structures> */
  
@@ -94,6 +119,7 @@ typedef struct  {
 /* </Structures> */
 
 /* <Prototypes> */
+void signal_handler(int sig);
 int init_system();
 int init_listen_socket_fd();
 int init_serial_fd(char *path);
@@ -115,6 +141,8 @@ void* fifo_get(fifo *f);
 void fifo_clear(fifo *f);
 void add_to_all_socket_fds(char * message);
 void add_to_serial_fd(char * message);
+int get_baud(char *szbaud);
+void log_message(char *msg,...);
 /* </Prototypes> */
 
 
@@ -133,6 +161,10 @@ struct sockaddr_in serv_addr;
 struct sockaddr_in peer_addr;
 // fifo buffer 
 fifo data_buffer;
+char * option_bind_ip=0;
+char * option_baud_rate=0;
+BOOL option_daemonize=FALSE;
+int option_debug_level=0;
 /* </Globals> */
 
 /* <Code> */
@@ -143,12 +175,47 @@ fifo data_buffer;
 */
 void error(char *msg,...)
 {
-    perror(msg);
-    exit(1);
+    char * szError=strerror(errno);
+    log_message(msg,msg+1);
+    log_message(" :");
+    log_message(szError);
+    log_message("\n");
+    log_message("exiting\n");
+    exit(EXIT_FAILURE);
+}
+
+/*
+ log a message to console or syslog 
+*/
+void log_message(char *msg,...) {
+  static char message[2048];
+  static int last=0;
+  va_list arg;
+  va_start(arg, msg);
+
+   
+  //printf("last: %i\n",last); 
+
+  last+=vsnprintf(&message[last], sizeof(message)-last, msg, arg);
+
+  if(last>=sizeof(message))
+    last=0; 
+  if(last) 
+   if(message[last-1]=='\n') {
+     if(option_daemonize) {
+       syslog(LOG_INFO,message);
+     }
+     else {
+       fprintf(stderr,message);
+     }
+     last=0;
+   } 
+
+  va_end(arg);
 }
 
 /* 
- nanosecond seleep 
+ nanosecond sleep 
 */
 int __nsleep(const struct timespec *req, struct timespec *rem)
 {
@@ -160,7 +227,7 @@ int __nsleep(const struct timespec *req, struct timespec *rem)
 }
 
 /* 
- sleep for N miliseconds 
+ sleep for N milliseconds 
 */
 int msleep(unsigned long milisec)
 {
@@ -180,9 +247,13 @@ void show_help(const char *appName)
 {
     fprintf(stderr,"Usage: %s -p <socket listen port> -s <serial port dev>\n\n"
             "  -h, -help                 display this help and exit\n"
-            "  -v, -version              display version\n"
             "  -p port                   socket port to listen on\n"
             "  -s <serial device>        serial device ex /dev/ttyUSB0\n"
+	    "options\n"
+            "  -i IP                     bind to a specific ip address default is ALL\n"
+            "  -b baudrate               set buad rate default to 9600\n"
+	    "  -d                        daemonize\n"
+	    "  -g                        debug level 0-3\n"
             "\n", appName);
 }
 
@@ -201,10 +272,21 @@ int init_system() {
   /* clear our read and write sets */
   FD_ZERO(&read_set);
   FD_ZERO(&write_set);
+     
+  /* Setup signal handling if we are to daemonize */
+  if(option_daemonize) {
+    signal(SIGHUP, signal_handler);
+    signal(SIGTERM, signal_handler);
+    signal(SIGINT, signal_handler);
+    signal(SIGQUIT, signal_handler);
+    setlogmask(LOG_UPTO(LOG_DEBUG));
+    openlog(DAEMON_NAME, LOG_CONS | LOG_NDELAY | LOG_PERROR | LOG_PID, LOG_USER);
+
+  }
 }
 
 /*
- clear all memeor used before we exit
+ clear all memory used before we exit
 */
 int free_system() {
   int x;
@@ -219,7 +301,7 @@ int free_system() {
 */
 int init_listen_socket_fd() {
     BOOL bOptionTrue=TRUE;
-    
+    int results;
     
     /* create a listening socket fd */
     listen_sock_fd = socket(AF_INET, SOCK_STREAM,0);
@@ -229,8 +311,16 @@ int init_listen_socket_fd() {
     /* clear our socket address structure */
     bzero((char *) &serv_addr, sizeof(serv_addr));
 
+    if(option_bind_ip!=NULL) {
+    	results=inet_pton(AF_INET,option_bind_ip, &serv_addr.sin_addr);
+	if(results!=1) {
+	   error("ERROR unable to bind to provided IP %s",option_bind_ip);
+        }
+    } else {
+    	serv_addr.sin_addr.s_addr = INADDR_ANY;
+    }
+    
     serv_addr.sin_family = AF_INET;
-    serv_addr.sin_addr.s_addr = INADDR_ANY;
     
     serv_addr.sin_port = htons(listen_port);
      
@@ -240,113 +330,157 @@ int init_listen_socket_fd() {
 
  
     if (bind(listen_sock_fd, (struct sockaddr *) &serv_addr,
-              sizeof(serv_addr)) < 0) 
-              error("ERROR binding to server port");
-    
-     listen(listen_sock_fd,listen_backlog);
-    
-     set_non_blocking(listen_sock_fd);
-  
-     add_fd(listen_sock_fd,LISTEN_SOCKET);
-   
-     printf("Listening socket created on port %i\n",listen_port); 
-     return TRUE;
-}
+		      sizeof(serv_addr)) < 0) 
+		      error("ERROR binding to server port");
+	    
+	     listen(listen_sock_fd,listen_backlog);
+	    
+	     set_non_blocking(listen_sock_fd);
+	  
+	     add_fd(listen_sock_fd,LISTEN_SOCKET);
+	   
+	     log_message("Listening socket created on port %i\n",listen_port); 
+	     return TRUE;
+	}
 
-/*
-  Init serial port and add fd to our list of sockets
-*/
-int init_serial_fd(char * szPortPath) {
-  struct termios newtio;
-  int id,x;
-  long BAUD;                      // derived baud rate from command line
+	/*
+	  Init serial port and add fd to our list of sockets
+	*/
+	int init_serial_fd(char * szPortPath) {
+	  struct termios newtio;
+	  int id,x;
+	  long BAUD;   
+	 
+	  // derived baud rate from command line default to B9600
+	  BAUD=get_baud(option_baud_rate);
+	  int fd = open(szPortPath, O_RDWR | O_NOCTTY | O_NDELAY);
 
-  /* initialize all 0's */ 
-  memset ((void *) &newtio, 0, sizeof (struct termios));
+	  if(fd<0) 
+	     error("cant open com port at %s\n",szPortPath);
 
-  int fd = open(szPortPath, O_RDWR | O_NOCTTY | O_NONBLOCK);
+	  log_message("opened com port at %s\n",szPortPath);
+	 
+	   /* add it and get our structure */
+	  id = add_fd(fd,SERIAL);
 
-  if(fd<0) 
-     error("cant open com port at %s\n",szPortPath);
+	  /* backup the original terminal io settings to restore back to later */
+	  tcgetattr(fd,&my_fds[id].oldtio);
 
-  /* add it and get our strucutre */
-  id = add_fd(fd,SERIAL);
-  BAUD=B9600;
-  tcgetattr(fd,&my_fds[id].oldtio); // save current port settings
+	  /* get the current terminal settings */
+	  tcgetattr(fd, &newtio);
 
-  /* turn this stuff off */
-  newtio.c_lflag &= ~(ECHO | ECHONL | ICANON | IEXTEN | ISIG);
-  fprintf(stderr,"c_lflags old:%08x  new:%08x\n",my_fds[id].oldtio.c_lflag,newtio.c_lflag);
+	  /* Set the baud rates */
+	  cfsetispeed(&newtio, BAUD);                 
+	  cfsetospeed(&newtio, BAUD);
 
-  newtio.c_cflag = BAUD | CS8 | CLOCAL | CREAD;
-  fprintf(stderr,"c_cflags old:%08x  new:%08x\n",my_fds[id].oldtio.c_cflag,newtio.c_cflag);
+	  
+	  /* change our c_lflag settings enable raw input mode */
+	  newtio.c_lflag &= ~(ICANON | ECHO | ISIG); 
+	  if(option_debug_level>2)
+	    log_message("c_lflags old:%08x  new:%08x\n",my_fds[id].oldtio.c_lflag,newtio.c_lflag);
 
-  newtio.c_iflag = IGNPAR;
-  fprintf(stderr,"c_iflags old:%08x  new:%08x\n",my_fds[id].oldtio.c_iflag,newtio.c_iflag);
-
-  newtio.c_oflag = 0;
-  fprintf(stderr,"c_oflags old:%08x  new:%08x\n",my_fds[id].oldtio.c_oflag,newtio.c_oflag);
-
-  /* dump bytes out of old c_cc */
-  fprintf(stderr,"c_cc old: ");
-  for(x=0;x<sizeof(my_fds[id].oldtio.c_cc);x++) {
-	fprintf(stderr,"%02x:",my_fds[id].oldtio.c_cc[x]);
-  }
-  fprintf(stderr,"\n");
-
-  newtio.c_cc[VINTR]    = 0;     /* Ctrl-c */ 
-  newtio.c_cc[VQUIT]    = 0;     /* Ctrl-\ */
-  newtio.c_cc[VERASE]   = 0;     /* del */
-  newtio.c_cc[VKILL]    = 0;     /* @ */
-  newtio.c_cc[VEOF]     = 4;     /* Ctrl-d */
-  newtio.c_cc[VTIME]    = 0;     /* inter-character timer unused */
-  newtio.c_cc[VMIN]     = 1;     /* blocking read until 1 character arrives */
-# ifdef VSWTC
-  newtio.c_cc[VSWTC]    = 0;
-# endif
-# ifdef VSWTCH
-  newio.c_cc[VSWTCH]    = 0;
-# endif
-  newtio.c_cc[VSTART]   = 0;     /* Ctrl-q */ 
-  newtio.c_cc[VSTOP]    = 0;     /* Ctrl-s */
-  newtio.c_cc[VSUSP]    = 0;     /* Ctrl-z */
-  newtio.c_cc[VEOL]     = 0;     /* '\0' */
-  newtio.c_cc[VREPRINT] = 0;     /* Ctrl-r */
-  newtio.c_cc[VDISCARD] = 0;     /* Ctrl-u */
-  newtio.c_cc[VWERASE]  = 0;     /* Ctrl-w */
-  newtio.c_cc[VLNEXT]   = 0;     /* Ctrl-v */
-  newtio.c_cc[VEOL2]    = 0;     /* '\0' */
-
-  /* dump bytes out of new c_cc */
-  fprintf(stderr,"c_cc new: ");
-  for(x=0;x<sizeof(newtio.c_cc);x++) {
-	fprintf(stderr,"%02x:",newtio.c_cc[x]);
-  }
-  fprintf(stderr,"\n");
+	  /* change our c_cflag settings a little for the port */
+	  newtio.c_cflag |= (CLOCAL | CREAD); /* Enable the receiver and set local mode */
+	  newtio.c_cflag &= ~PARENB; /* Mask the character size to 8 bits, no parity */
+	  newtio.c_cflag &= ~CSTOPB;
+	  newtio.c_cflag &= ~CSIZE;
+	  newtio.c_cflag |=  CS8;                   /* Select 8 data bits */
+	  newtio.c_cflag &= ~CRTSCTS;               /* Disable hardware flow control */
+	  if(option_debug_level>2)
+	    log_message("c_cflags old:%08x  new:%08x\n",my_fds[id].oldtio.c_cflag,newtio.c_cflag);
 
 
-  tcflush(fd, TCIFLUSH);
-  tcsetattr(fd,TCSANOW,&newtio);
-  print_serial_fd_status(fd);
+	  /* change our c_iflag settings (no changes for now) */
+	  if(option_debug_level>2)
+	    log_message("c_iflags old:%08x  new:%08x\n",my_fds[id].oldtio.c_iflag,newtio.c_iflag);
 
-  return 1;
-}
+	  /* change our c_oflag settings (none for now) */
+	  if(option_debug_level>2)
+	    log_message("c_oflags old:%08x  new:%08x\n",my_fds[id].oldtio.c_oflag,newtio.c_oflag);
 
-/*
- prints out the specific serial fd terminal flags  
-*/
-void print_serial_fd_status(int fd) {
-        int status;
-        unsigned int arg;
-        status = ioctl(fd, TIOCMGET, &arg);
-        fprintf(stderr,"Serial Status ");
-        if(arg & TIOCM_RTS) fprintf(stderr,"RTS ");
-        if(arg & TIOCM_CTS) fprintf(stderr,"CTS ");
-        if(arg & TIOCM_DSR) fprintf(stderr,"DSR ");
-        if(arg & TIOCM_CAR) fprintf(stderr,"DCD ");
-        if(arg & TIOCM_DTR) fprintf(stderr,"DTR ");
-        if(arg & TIOCM_RNG) fprintf(stderr,"RI ");
-        fprintf(stderr,"\r\n");
+	  /* dump bytes out of old c_cc */
+	  if(option_debug_level>2) {
+  	    log_message("c_cc old: ");
+	    for(x=0;x<sizeof(my_fds[id].oldtio.c_cc);x++) {
+ 		log_message("%02x:",my_fds[id].oldtio.c_cc[x]);
+	    }
+	    log_message("\n");
+	  }
+
+	  newtio.c_cc[VINTR]    = 0;     /* Ctrl-c */ 
+	  newtio.c_cc[VQUIT]    = 0;     /* Ctrl-\ */
+	  newtio.c_cc[VERASE]   = 0;     /* del */
+	  newtio.c_cc[VKILL]    = 0;     /* @ */
+	  newtio.c_cc[VEOF]     = 4;     /* Ctrl-d */
+	  newtio.c_cc[VTIME]    = 0;     /* inter-character timer unused */
+	  newtio.c_cc[VMIN]     = 1;     /* blocking read until 1 character arrives */
+	# ifdef VSWTC
+	  newtio.c_cc[VSWTC]    = 0;
+	# endif
+	# ifdef VSWTCH
+	  newio.c_cc[VSWTCH]    = 0;
+	# endif
+	  newtio.c_cc[VSTART]   = 0;     /* Ctrl-q */ 
+	  newtio.c_cc[VSTOP]    = 0;     /* Ctrl-s */
+	  newtio.c_cc[VSUSP]    = 0;     /* Ctrl-z */
+	  newtio.c_cc[VEOL]     = 0;     /* '\0' */
+	  newtio.c_cc[VREPRINT] = 0;     /* Ctrl-r */
+	  newtio.c_cc[VDISCARD] = 0;     /* Ctrl-u */
+	  newtio.c_cc[VWERASE]  = 0;     /* Ctrl-w */
+	  newtio.c_cc[VLNEXT]   = 0;     /* Ctrl-v */
+	  newtio.c_cc[VEOL2]    = 0;     /* '\0' */
+
+	  /* dump bytes out of new c_cc */
+	  if(option_debug_level>2) {
+	    log_message("c_cc new: ");
+	    for(x=0;x<sizeof(newtio.c_cc);x++) {
+		log_message("%02x:",newtio.c_cc[x]);
+	    }
+	    log_message("\n");
+	  }
+
+	  tcflush(fd, TCIFLUSH);
+	  tcsetattr(fd,TCSANOW,&newtio);
+	  if(option_debug_level>2)
+	    print_serial_fd_status(fd);
+
+	  return 1;
+	}
+
+	/*
+	 prints out the specific serial fd terminal flags  
+	*/
+	void print_serial_fd_status(int fd) {
+		int status;
+		unsigned int arg;
+		status = ioctl(fd, TIOCMGET, &arg);
+		log_message("Serial Status ");
+		if(arg & TIOCM_RTS) log_message("RTS ");
+		if(arg & TIOCM_CTS) log_message("CTS ");
+		if(arg & TIOCM_DSR) log_message("DSR ");
+		if(arg & TIOCM_CAR) log_message("DCD ");
+		if(arg & TIOCM_DTR) log_message("DTR ");
+		if(arg & TIOCM_RNG) log_message("RI ");
+		log_message("\r\n");
+	}
+	/*
+	 gets the baud numeric from a string constant 
+	*/
+	int get_baud(char * szbaud) {
+	   speed_spec *s;
+	   int speed=0;
+	   if(szbaud==NULL) return speed;
+
+	   for(s = speeds; s->name; s++) {
+	      if(strcmp(s->name, szbaud) == 0) {
+		 speed = s->flag;
+         break;
+      }
+   }
+   /* default to 3 in our array or 9600 */
+   if(speed==0) s=&speeds[3];
+   log_message("setting speed %s\n", s->name);
+   return speed;
 }
 
 /* 
@@ -368,7 +502,8 @@ int add_fd(int fd,int fd_type) {
   int results=-1;
   for(x=0;x<MAXCONNECTIONS;x++) {
       if(my_fds[x].inuse==FALSE) {
-	fprintf(stderr,"adding %s fd at %i\n",fd_type_strings[fd_type],x);
+	if(option_debug_level>2)
+	  log_message("adding %s fd at %i\n",fd_type_strings[fd_type],x);
 	my_fds[x].inuse=TRUE;
 	my_fds[x].fd_type=fd_type;
 	my_fds[x].fd=fd;
@@ -376,7 +511,7 @@ int add_fd(int fd,int fd_type) {
 	break;
       }
   }
-  
+ 
   return results;
 }
 
@@ -385,7 +520,7 @@ int add_fd(int fd,int fd_type) {
 */
 int cleanup_fd(int n) {
 
-  /* dont do anything unless its in was active */
+  /* don't do anything unless its in was active */
   if(my_fds[n].inuse) {
 
     /* if this is a terminal or serial fd then restore its settings */
@@ -421,7 +556,7 @@ void listen_loop() {
 
 
 	  
-     fprintf(stderr,"Start wait loop\n");
+     log_message("Start wait loop\n");
      while(!kbhit()) {
         fd_count=0;
 	/* add all sockets to our fdset */
@@ -442,7 +577,7 @@ void listen_loop() {
 	/* see if any sockets need service */
 	n=select(FD_SETSIZE,&read_fdset,&write_fdset,0,&wait);
 	if(n==-1) {
-	    fprintf(stderr,"socket error\n");
+	    log_message("socket error\n");
         } else {
 	    /* check every socket to find the one that needs service */
 	    for(n=0;n<MAXCONNECTIONS;n++) {
@@ -456,8 +591,8 @@ void listen_loop() {
 				if(newsockfd!=-1) {
 				    added_id=add_fd(newsockfd,CLIENT_SOCKET);
 				    if(added_id>=0) {
-					fprintf(stderr,"socket connected\n");
-					/* adding anything to the fifo must be malloced */
+					log_message("socket connected\n");
+					/* adding anything to the fifo must be allocated */
 					tempbuffer=strdup("!SER2SOCK Connected\r\n");
 					fifo_add(&my_fds[added_id].send_buffer,tempbuffer);
 				    }
@@ -470,13 +605,14 @@ void listen_loop() {
 			        if(received>0) {
 			          buffer[received] = 0;
 				  add_to_all_socket_fds(buffer);
-			          fprintf(stderr,"%s",buffer);
+				  if(option_debug_level>1)
+			             log_message("%s",buffer);
 			        } 
 			    }
 
 			    if(received<0) {
 				/*
-					todo: add error handeling  
+					todo: add error handling  
 				*/
 			    }
 			  } else {
@@ -484,11 +620,12 @@ void listen_loop() {
 			    received = recv(my_fds[n].fd, buffer, sizeof(buffer), 0);
 			    buffer[received] = 0;
 			    if(received==0) {
-			      fprintf(stderr,"closing socket errno: %i\n", errno);
+			      log_message("closing socket errno: %i\n", errno);
 			      cleanup_fd(n);
 			    } else {
 			      add_to_serial_fd(buffer);
-			      fprintf(stderr,"Message from socket: %i '%s'\n", received, buffer);
+	  		      if(option_debug_level>2)
+			        log_message("Message from socket: %i '%s'\n", received, buffer);
 			    }
 			  }
 			}			  
@@ -501,12 +638,13 @@ void listen_loop() {
 			    if(my_fds[n].fd_type==CLIENT_SOCKET)
 			       send(my_fds[n].fd,tempbuffer,strlen(tempbuffer),0);
 			    if(my_fds[n].fd_type==SERIAL) {
-			       fprintf(stderr,"Sending '%s' to com port\n",tempbuffer);
+			       if(option_debug_level>2)	
+			         log_message("Sending '%s' to com port\n",tempbuffer);
 			       write(my_fds[n].fd,tempbuffer,strlen(tempbuffer));
  			     }
 			    free(tempbuffer);
 			} else {
-			   //printf("nothing to send\n");
+			   //log_message("nothing to send\n");
 			}
 		    }		   
 		}
@@ -516,11 +654,11 @@ void listen_loop() {
 	msleep(20);
      }
 
-     fprintf(stderr,"\ncleaning up\n");
+     log_message("\ncleaning up\n");
      free_system();
 
-     fprintf(stderr,"done.\n");
-     exit(1);
+     log_message("done.\n");
+     exit(EXIT_SUCCESS);
 }
 
 /* 
@@ -535,7 +673,7 @@ void add_to_all_socket_fds(char * message) {
 	/* 
             Adding anything to the fifo must be allocated so it can be free'd later
            Not very efficient but we have plenty of mem with as few connections as we
-           will use. If we needed many more I would need to refactor how this works
+           will use. If we needed many more I would need to re-factor this code
          */
 	for(n=0;n<MAXCONNECTIONS;n++) {
 		if(my_fds[n].fd_type==CLIENT_SOCKET) {
@@ -556,6 +694,23 @@ void add_to_serial_fd(char *message) {
 	fifo_add(&my_fds[0].send_buffer,tempbuffer);
 }
 
+/* 
+ skip over ' ' if the add one to the option 
+*/
+int skip_param(char *buf) {
+	int x=0;
+        /* did they do -afoobar or -a foobar */
+	if(buf[2]!=0) 
+	  return 2;
+
+        /* skip any other whitespace */
+        x=3;
+        while(buf[x]==' ' && x < 40) x++;
+	if(x<40) return x;
+
+        return 0;
+}
+
 /*
  parse_args
 */
@@ -563,6 +718,7 @@ int parse_args(int argc, char * argv[]) {
 
 	char **loc_argv=argv;
 	int loc_argc = argc;
+	int skip;
 
 	while (loc_argc > 1) {	
 		if(loc_argv[1][0] == '-')
@@ -570,18 +726,35 @@ int parse_args(int argc, char * argv[]) {
 		{
 			case 'h':
 				show_help(argv[0]);
-				exit(1);
+				exit(EXIT_SUCCESS);
 				break;
 			case 'p':
-				listen_port=atoi(&loc_argv[1][3]);
+				skip=skip_param(&loc_argv[1][0]);
+				listen_port=atoi(&loc_argv[1][skip]);
 				break;
 			case 's':
-				serial_device_name=&loc_argv[1][3];
+				skip=skip_param(&loc_argv[1][0]);
+				serial_device_name=&loc_argv[1][skip];
+				break;
+			case 'i':
+				skip=skip_param(&loc_argv[1][0]);
+				option_bind_ip=&loc_argv[1][skip];
+				break;
+			case 'b':
+				skip=skip_param(&loc_argv[1][0]);
+				option_baud_rate=&loc_argv[1][skip];
+				break;
+			case 'd':
+				option_daemonize=TRUE;
+				break;
+			case 'g':
+				skip=skip_param(&loc_argv[1][0]);
+				option_debug_level=atoi(&loc_argv[1][skip]);
 				break;
 			default:
 				show_help(argv[0]);
 				error("ERROR Wrong argument: %s\n", loc_argv[1]);
-				exit(1);
+				exit(EXIT_FAILURE);
 		}
 
 		++loc_argv;
@@ -590,9 +763,9 @@ int parse_args(int argc, char * argv[]) {
 
 	if(serial_device_name==0) {
 		show_help(argv[0]);
-		error("ERROR Missing serial device name\n");
+		log_message("Error missing serial device name exiting\n");
+		exit(EXIT_FAILURE);
 	}
-
 	return TRUE;
 }
 
@@ -601,17 +774,17 @@ int parse_args(int argc, char * argv[]) {
 */
 int main(int argc, char *argv[])
 {
-     /* startup banner and args check */
-     fprintf(stderr,"Serial 2 Socket Relay version %s\n", SER2SOCK_VERSION);
-     if (argc < 2) {
-        show_help(argv[0]); 
-	error("ERROR insufficient arguments\n");
-	exit(1);
-     }
-
      /* parse args and set global vars as needed */ 
      parse_args(argc,argv);
-    
+
+     /* startup banner and args check */
+     log_message("Serial 2 Socket Relay version %s starting\n", SER2SOCK_VERSION);
+     if (argc < 2) {
+        show_help(argv[0]); 
+	log_message("ERROR insufficient arguments\n");
+	exit(EXIT_FAILURE);
+     }
+
      /* initialize the system */
      init_system();
 
@@ -623,14 +796,71 @@ int main(int argc, char *argv[])
 	error("ERROR initializing listen socket\n");
      }
 
+    /* Our process ID and Session ID */
+    pid_t pid, sid;
+ 
+    if (option_daemonize) {
+        syslog(LOG_INFO, "daemonizing the process");
+ 
+        /* Fork off the parent process */
+        pid = fork();
+        if (pid < 0) {
+            exit(EXIT_FAILURE);
+        }
+        /* If we got a good PID, then
+           we can exit the parent process. */
+        if (pid > 0) {
+            exit(EXIT_SUCCESS);
+        }
+ 
+        /* Change the file mode mask */
+        umask(0);
+ 
+        /* Create a new SID for the child process */
+        sid = setsid();
+        if (sid < 0) {
+            /* Log the failure */
+            exit(EXIT_FAILURE);
+        }
+ 
+        /* Change the current working directory */
+        if ((chdir("/")) < 0) {
+            /* Log the failure */
+            exit(EXIT_FAILURE);
+        }
+ 
+        /* Close out the standard file descriptors */
+        close(STDIN_FILENO);
+        close(STDOUT_FILENO);
+        close(STDERR_FILENO);
+    }
+
      /* begin our listen loop */
      listen_loop();
      
      return 0; 
 }
 
+/*
+ signal handlers 
+*/
+void signal_handler(int sig) {
+    switch(sig) {
+        case SIGHUP:
+            syslog(LOG_WARNING, "Received SIGHUP signal.");
+            break;
+        case SIGTERM:
+            syslog(LOG_WARNING, "Received SIGTERM signal.");
+            break;
+        default:
+            syslog(LOG_WARNING, "Unhandled signal (%d) %s", strsignal(sig));
+            break;
+    }
+}
+
+
 /* 
- good old kbhit funciton just back in the day 
+ good old kbhit function just back in the day 
 */
 int kbhit(void)
 {
@@ -641,7 +871,7 @@ int kbhit(void)
 
    tcgetattr(STDIN_FILENO, &oldt);
    newt = oldt;
-   newt.c_lflag &= ~(ICANON | ECHO);
+   newt.c_lflag &= ~(ICANON | ECHO | ISIG);
    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
    oldf = fcntl(STDIN_FILENO, F_GETFL, 0);
    fcntl(STDIN_FILENO, F_SETFL, oldf | O_NONBLOCK);
@@ -733,5 +963,7 @@ void* fifo_get(fifo *f){
    return 0;
 }   
 //</Fifo Buffer>
+
+
 
 /* </Code> */
