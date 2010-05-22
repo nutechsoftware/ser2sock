@@ -62,7 +62,7 @@
 #include <time.h>
 #include <arpa/inet.h>
 
-#define SER2SOCK_VERSION "V1.2.2"
+#define SER2SOCK_VERSION "V1.2.3"
 #define TRUE 1
 #define FALSE 0
 typedef int BOOL;
@@ -70,9 +70,10 @@ typedef int BOOL;
 #define MAX_FIFO_BUFFERS 30
 
 /* <Types and Constants> */
-const char * fd_type_strings[] = {"","LISTEN","CLIENT","SERIAL"};
+const char * fd_type_strings[] = {"NA","LISTEN","CLIENT","SERIAL"};
 enum FD_TYPES
 {
+    NA,
     LISTEN_SOCKET = 1,
     CLIENT_SOCKET,
     SERIAL
@@ -109,6 +110,7 @@ typedef struct
 typedef struct
 {
 /* flags */
+    int new;
     int inuse;
     int fd_type;
 
@@ -150,6 +152,7 @@ int   fifo_empty(fifo *f);
 int   fifo_add(fifo *f,void *next);
 void* fifo_get(fifo *f);
 void fifo_clear(fifo *f);
+static void writepid(void);
 /* </Prototypes> */
 
 /* <Globals> */
@@ -284,8 +287,9 @@ int init_system()
     for(x=0;x<MAXCONNECTIONS;x++)
     {
         my_fds[x].inuse=FALSE;
+	my_fds[x].new=TRUE;
         my_fds[x].fd=-1;
-        my_fds[x].fd_type=LISTEN_SOCKET;
+        my_fds[x].fd_type=NA;
         fifo_init(&my_fds[x].send_buffer,MAX_FIFO_BUFFERS);
     }
 
@@ -557,6 +561,7 @@ int add_fd(int fd,int fd_type)
             my_fds[x].inuse=TRUE;
             my_fds[x].fd_type=fd_type;
             my_fds[x].fd=fd;
+	    my_fds[x].new=TRUE;
             results=x;
             break;
         }
@@ -590,6 +595,9 @@ int cleanup_fd(int n)
 
 /* mark the element as free for reuse */
         my_fds[n].inuse=FALSE;
+
+/* set the type to null */
+	my_fds[n].fd_type=NA;
 
     }
     return TRUE;
@@ -752,6 +760,7 @@ void add_to_all_socket_fds(char * message)
 {
 
     char * tempbuffer;
+    char * location;
     int n;
 /* 
         Adding anything to the fifo must be allocated so it can be free'd later
@@ -760,12 +769,29 @@ void add_to_all_socket_fds(char * message)
      */
     for(n=0;n<MAXCONNECTIONS;n++)
     {
-        if(my_fds[n].fd_type==CLIENT_SOCKET)
-        {
+	if(my_fds[n].inuse==TRUE) 
+	{
+        	if(my_fds[n].fd_type==CLIENT_SOCKET)
+        	{
 /* caller of fifo_get must free this */
-            tempbuffer=strdup(message);
-            fifo_add(&my_fds[n].send_buffer,tempbuffer);
-        }
+		  if(!my_fds[n].new) {
+            	     tempbuffer=strdup(message);
+            	    fifo_add(&my_fds[n].send_buffer,tempbuffer);
+		  }
+		  else {
+/* 
+  wait for our first \n to start on a clean line. We are skipping
+  our first message so we dont send a partial message
+*/
+		    location = strchr(message,'\n');
+		    if(location!=NULL) {
+            	       tempbuffer=strdup(location);
+                       fifo_add(&my_fds[n].send_buffer,tempbuffer);
+		       my_fds[n].new=FALSE;
+		    }
+		  }
+        	}
+	}
     }
 
 }
@@ -862,6 +888,26 @@ int parse_args(int argc, char * argv[])
     return TRUE;
 }
 
+/*
+ writepid 
+*/
+static void writepid(void)
+{
+  int fd;
+  char buff[20];
+  if ((fd = open(PID_FILE, O_CREAT|O_WRONLY, 0600))>=0)
+    {
+      snprintf(buff, 20, "%d\n", (int)getpid());
+      if (write(fd, buff, strlen(buff)) == -1)
+        log_message("Error writing to pid file %s", PID_FILE);
+      close(fd);
+      return;
+    }
+  else
+    log_message("Error opening pid file %s", PID_FILE);
+}
+
+
 
 /*
  main()
@@ -934,7 +980,11 @@ int main(int argc, char *argv[])
         close(STDIN_FILENO);
         close(STDOUT_FILENO);
         close(STDERR_FILENO);
+
+/* write our pid file */
+   	writepid();
     }
+
 
 /* begin our listen loop */
     listen_loop();
@@ -1051,11 +1101,17 @@ void fifo_destroy(fifo *f)
 void fifo_clear(fifo *f)
 {
     void *p;
+    if(option_debug_level>2)
+      log_message("clearning fifo: ");
     while(!fifo_empty(f))
-    {
+    {	
+        if(option_debug_level>2)
+	 log_message("*");
         p=fifo_get(f);
         if(p) free(p);
     }
+    if(option_debug_level>2)
+      log_message(" done.\n");
 }
 
 
