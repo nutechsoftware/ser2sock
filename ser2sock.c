@@ -722,8 +722,9 @@ void listen_loop()
                         if(!fifo_empty(&my_fds[n].send_buffer))
                         {
                             tempbuffer=(char *)fifo_get(&my_fds[n].send_buffer);
-                            if(my_fds[n].fd_type==CLIENT_SOCKET)
+                            if(my_fds[n].fd_type==CLIENT_SOCKET) {
                                 send(my_fds[n].fd,tempbuffer,strlen(tempbuffer),0);
+			    }
                             if(my_fds[n].fd_type==SERIAL)
                             {
                                 if(option_debug_level>2)
