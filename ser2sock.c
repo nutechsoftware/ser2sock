@@ -15,9 +15,6 @@
  *  A PARTICULAR PURPOSE. Nu Tech reserves all rights not expressly
  *  granted herein.
  *
- *  This file is provided AS IS with NO WARRANTY OF ANY KIND, INCLUDING THE
- *  WARRANTY OF DESIGN, MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
- *
  *
  *  PURPOSE: Connect to a given device file such as a serial device and multiplex
  *           all messages from this file to every socket that is connected.
@@ -37,8 +34,8 @@
  *     that helped support the AD2USB project get off the ground.
  *
  *  REV INFO: ver 1.0 05/08/10 Initial release
- *		 1.1 05/18/10 Refining, looking for odd echo bug thanks Richard!
- *		 1.2 05/19/10 Adding daemon mode, bind to ip, debug output
+ *		  1.1 05/18/10 Refining, looking for odd echo bug thanks Richard!
+ *		  1.2 05/19/10 Adding daemon mode, bind to ip, debug output
  *                    syslog and more
  *
 \******************************************************************************/
@@ -667,7 +664,7 @@ void listen_loop()
                                 if(added_id>=0)
                                 {
                                     log_message("socket connected\n");
-/* adding anything to the fifo must be allocated */
+/* adding anything to the fifo must be pre allocated */
                                     tempbuffer=strdup("!SER2SOCK Connected\r\n");
                                     fifo_add(&my_fds[added_id].send_buffer,tempbuffer);
                                 }
@@ -1023,7 +1020,7 @@ void signal_handler(int sig)
 
 
 /* 
- good old kbhit function just back in the day
+ good old kbhit function just like back in the day
 */
 int kbhit(void)
 {
