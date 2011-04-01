@@ -33,10 +33,11 @@
  *     bsd and excellent feedback on features. Also a big thanks to everyone
  *     that helped support the AD2USB project get off the ground.
  *
- *  REV INFO: ver 1.0 05/08/10 Initial release
- *		  1.1 05/18/10 Refining, looking for odd echo bug thanks Richard!
- *		  1.2 05/19/10 Adding daemon mode, bind to ip, debug output
- *                    syslog and more
+ *  REV INFO: ver 1.0   05/08/10 Initial release
+ *		  1.1   05/18/10 Refining, looking for odd echo bug thanks Richard!
+ *		  1.2   05/19/10 Adding daemon mode, bind to ip, debug output
+ *                      syslog and more
+ *		  1.2.4 01/17/11 Fixed a socket bug
  *
 \******************************************************************************/
 #include <stdint.h>
@@ -59,7 +60,7 @@
 #include <time.h>
 #include <arpa/inet.h>
 
-#define SER2SOCK_VERSION "V1.2.3"
+#define SER2SOCK_VERSION "V1.2.4"
 #define TRUE 1
 #define FALSE 0
 typedef int BOOL;
@@ -697,7 +698,6 @@ void listen_loop()
                             {
                                 errno=0;
                                 received = recv(my_fds[n].fd, buffer, sizeof(buffer), 0);
-                                buffer[received] = 0;
                                 if(received==0)
                                 {
                                     log_message("closing socket errno: %i\n", errno);
@@ -705,6 +705,13 @@ void listen_loop()
                                 }
                                 else
                                 {
+                                    if(received<0) {
+                                        if (errno == EAGAIN || errno == EINTR)
+                                            continue;
+                                        log_message("closing socket errno: %i\n", errno);
+                                    	cleanup_fd(n);
+                                    }
+                                    buffer[received] = 0;
                                     add_to_serial_fd(buffer);
                                     if(option_debug_level>2)
                                         log_message("Message from socket: %i '%s'\n", received, buffer);
