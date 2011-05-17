@@ -38,6 +38,7 @@
  *		  1.2   05/19/10 Adding daemon mode, bind to ip, debug output
  *                      syslog and more
  *		  1.2.4 01/17/11 Fixed a socket bug
+ *		  1.2.5 04/01/11 Working on issue on BSD systems
  *
 \******************************************************************************/
 #include <stdint.h>
@@ -68,6 +69,7 @@ typedef int BOOL;
 #define MAX_FIFO_BUFFERS 30
 
 /* <Types and Constants> */
+const char terminal_init_string[] = "\377\375\042";
 const char * fd_type_strings[] = {"NA","LISTEN","CLIENT","SERIAL"};
 enum FD_TYPES
 {
@@ -169,6 +171,7 @@ fifo data_buffer;
 char * option_bind_ip=0;
 char * option_baud_rate=0;
 BOOL option_daemonize=FALSE;
+BOOL option_send_terminal_init=FALSE;
 int option_debug_level=0;
 /* </Globals> */
 
@@ -271,6 +274,7 @@ void show_help(const char *appName)
         "  -i IP                     bind to a specific ip address default is ALL\n"
         "  -b baudrate               set buad rate default to 9600\n"
         "  -d                        daemonize\n"
+        "  -t                        send terminal init string\n"
         "  -g                        debug level 0-3\n"
         "\n", appName);
 }
@@ -424,11 +428,13 @@ int init_serial_fd(char * szPortPath)
     if(option_debug_level>2)
         log_message("c_lflags old:%08x  new:%08x\n",my_fds[id].oldtio.c_lflag,newtio.c_lflag);
 
-/* change our c_iflag settings (no changes for now) */
+/* change our c_iflag settings (turn off all flags) */
+    newtio.c_iflag = 0;
     if(option_debug_level>2)
         log_message("c_iflags old:%08x  new:%08x\n",my_fds[id].oldtio.c_iflag,newtio.c_iflag);
 
-/* change our c_oflag settings (none for now) */
+/* change our c_oflag settings (turn off all flags) */
+    newtio.c_oflag = 0;
     if(option_debug_level>2)
         log_message("c_oflags old:%08x  new:%08x\n",my_fds[id].oldtio.c_oflag,newtio.c_oflag);
 
@@ -610,9 +616,9 @@ void listen_loop()
     unsigned int clilen;
     int newsockfd;
     int added_id;
-    char *tempbuffer;
-    char buffer[1024];
-    int n,fd_count,received;
+    unsigned char *tempbuffer;
+    unsigned char buffer[1024];
+    int n,x,fd_count,received;
     fd_set read_fdset,write_fdset;
     clilen = sizeof(struct sockaddr_in);
     struct timeval wait;
@@ -666,6 +672,14 @@ void listen_loop()
                                 {
                                     log_message("socket connected\n");
 /* adding anything to the fifo must be pre allocated */
+                                    if(option_send_terminal_init) {
+                                        tempbuffer=strdup("!");
+                                        fifo_add(&my_fds[added_id].send_buffer,tempbuffer);
+                                        tempbuffer=strdup(terminal_init_string);
+                                        fifo_add(&my_fds[added_id].send_buffer,tempbuffer);
+                                        tempbuffer=strdup("\r\n");
+                                        fifo_add(&my_fds[added_id].send_buffer,tempbuffer);
+                                    }
                                     tempbuffer=strdup("!SER2SOCK Connected\r\n");
                                     fifo_add(&my_fds[added_id].send_buffer,tempbuffer);
                                 }
@@ -682,8 +696,17 @@ void listen_loop()
                                     {
                                         buffer[received] = 0;
                                         add_to_all_socket_fds(buffer);
-                                        if(option_debug_level>1)
-                                            log_message("%s",buffer);
+                                        if(option_debug_level>1) {
+                                            if(option_debug_level>2) {
+                                                log_message("SERIAL>'");
+                                                for(x=0;x<received;x++) {
+                                                    log_message("[%02x]",buffer[x]);
+                                                }
+					    } else {
+                                                log_message("%s",buffer);
+                                            }
+                                            log_message("\n");
+					}
                                     }
                                 }
 
@@ -713,8 +736,13 @@ void listen_loop()
                                     }
                                     buffer[received] = 0;
                                     add_to_serial_fd(buffer);
-                                    if(option_debug_level>2)
-                                        log_message("Message from socket: %i '%s'\n", received, buffer);
+                                    if(option_debug_level>2) {
+                                        log_message("SOCKET[%i]>", n);
+                                        for(x=0;x<strlen(buffer);x++) {
+                                            log_message("[%02x]",buffer[x]);
+                                        }
+                                        log_message("\n");
+                                    }
                                 }
                             }
                         }
@@ -727,13 +755,22 @@ void listen_loop()
                         {
                             tempbuffer=(char *)fifo_get(&my_fds[n].send_buffer);
                             if(my_fds[n].fd_type==CLIENT_SOCKET) {
+                                if(option_debug_level>2)
+                                    log_message("SOCKET[%i]<",n);
                                 send(my_fds[n].fd,tempbuffer,strlen(tempbuffer),0);
+
 			    }
                             if(my_fds[n].fd_type==SERIAL)
                             {
                                 if(option_debug_level>2)
-                                    log_message("Sending '%s' to com port\n",tempbuffer);
+                                    log_message("SERIAL[%i]<",n);
                                 write(my_fds[n].fd,tempbuffer,strlen(tempbuffer));
+                            }
+                            if(option_debug_level>2) {
+                                for(x=0;x<strlen(tempbuffer);x++) {
+                                    log_message("[%02x]",tempbuffer[x]);
+                                }
+                                log_message("\n");
                             }
                             free(tempbuffer);
                         }
@@ -767,11 +804,12 @@ void add_to_all_socket_fds(char * message)
     char * tempbuffer;
     char * location;
     int n;
-/* 
+
+    /* 
         Adding anything to the fifo must be allocated so it can be free'd later
        Not very efficient but we have plenty of mem with as few connections as we
        will use. If we needed many more I would need to re-factor this code
-     */
+    */
     for(n=0;n<MAXCONNECTIONS;n++)
     {
 	if(my_fds[n].inuse==TRUE) 
@@ -869,6 +907,9 @@ int parse_args(int argc, char * argv[])
                 break;
             case 'd':
                 option_daemonize=TRUE;
+                break;
+            case 't':
+                option_send_terminal_init=TRUE;
                 break;
             case 'g':
                 skip=skip_param(&loc_argv[1][0]);
