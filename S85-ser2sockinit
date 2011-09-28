@@ -1,0 +1,6 @@
+#!/bin/sh
+mknod /dev/ttyUSB0 c 188 0 > /dev/null 2>&1
+insmod usbserial > /dev/null 2>&1
+insmod ftdi_sio > /dev/null 2>&1
+ser2sock -p 10000 -s /dev/ttyUSB0 -d -g 3 > /dev/null 2>&1
+

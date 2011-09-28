@@ -513,7 +513,7 @@ int init_serial_fd(char * szPortPath)
 	newtio.c_cc[VSWTC] = 0;
 # endif
 # ifdef VSWTCH
-	newio.c_cc[VSWTCH] = 0;
+	//newio.c_cc[VSWTCH] = 0;
 # endif
 	newtio.c_cc[VSTART] = 0; /* Ctrl-q */
 	newtio.c_cc[VSTOP] = 0; /* Ctrl-s */
@@ -552,7 +552,7 @@ void print_serial_fd_status(int fd)
 	int status;
 	unsigned int arg;
 	status = ioctl(fd, TIOCMGET, &arg);
-	log_message("Serial Status ");
+	log_message("Serial Status (%i) ",status);
 	if (arg & TIOCM_RTS)
 		log_message("RTS ");
 	if (arg & TIOCM_CTS)
@@ -747,8 +747,8 @@ void listen_loop()
 			else
 				msleep(10);
 
-		}
-		else
+		} else 
+		{
 			if ((tv_last_serial_check.tv_sec == 0) || (get_time_difference(
 					&tv_last_serial_check) >= 100))
 			{
@@ -760,6 +760,7 @@ void listen_loop()
 					{
 						if (my_fds[n].fd_type == SERIAL)
 						{
+#ifdef USE_TIOCMGET
 							if (ioctl(my_fds[n].fd, TIOCMGET, &tmp) < 0)
 							{
 								log_message(
@@ -768,10 +769,12 @@ void listen_loop()
 								clear_serial(n);
 							}
 							break;
+#endif
 						}
 					}
 				}
 			}
+		}
 
 		fd_count = 0;
 		/* add all sockets to our fdset */
