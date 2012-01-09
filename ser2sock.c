@@ -40,7 +40,7 @@
  *		  1.2.4 01/17/11 Fixed a socket bug
  *        1.2.5 04/01/11 Working on issue on BSD systems
  *		  1.3.0 05/16/11 Reestablishing connection with the serial device
- *
+ *		  1.3.1 01/09/12 small bug fix from Andrew Becher
  *
  \******************************************************************************/
 #define _GNU_SOURCE
@@ -513,7 +513,7 @@ int init_serial_fd(char * szPortPath)
 	newtio.c_cc[VSWTC] = 0;
 # endif
 # ifdef VSWTCH
-	//newio.c_cc[VSWTCH] = 0;
+	newtio.c_cc[VSWTCH] = 0;
 # endif
 	newtio.c_cc[VSTART] = 0; /* Ctrl-q */
 	newtio.c_cc[VSTOP] = 0; /* Ctrl-s */
