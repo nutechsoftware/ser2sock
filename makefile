@@ -16,13 +16,13 @@ LDFLAGS += -Xlinker --gc-sections -s
 SRCS = $(wildcard *.c)
 OBJS = $(SRCS:.c=.o)
 
-all: ser2sock
+all: ser2sockmips
 
-ser2sock: $(OBJS)
+ser2sockmips: $(OBJS)
 	$(CXX) $(LDFLAGS) $(LDLIBS) -o $@ $(OBJS) 
 
 %.o : %.c
 	$(CXX) $(CXXFLAGS) -c $<
 
 clean:
-	$(RM) *.o ser2sock
+	$(RM) *.o ser2sockmips
