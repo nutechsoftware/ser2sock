@@ -40,7 +40,8 @@
  *		  1.2.4 01/17/11 Fixed a socket bug
  *        1.2.5 04/01/11 Working on issue on BSD systems
  *		  1.3.0 05/16/11 Reestablishing connection with the serial device
- *		  1.3.1 01/09/12 small bug fix from Andrew Becher
+ *		  1.3.1 04/27/12 fixed a few compiler issues with some systems
+ *
  *
  \******************************************************************************/
 #define _GNU_SOURCE
@@ -68,7 +69,7 @@
 #include <sched.h>
 #endif
 
-#define SER2SOCK_VERSION "V1.3"
+#define SER2SOCK_VERSION "V1.3.1"
 #define TRUE 1
 #define FALSE 0
 typedef int BOOL;
@@ -252,11 +253,11 @@ void vlog_message(char *msg, va_list arg)
 		{
 			if (option_daemonize)
 			{
-				syslog(LOG_INFO, message);
+				syslog(LOG_INFO, "%s", message);
 			}
 			else
 			{
-				fprintf(stderr, message);
+				fprintf(stderr, "%s", message);
 			}
 			last = 0;
 		}
@@ -513,7 +514,7 @@ int init_serial_fd(char * szPortPath)
 	newtio.c_cc[VSWTC] = 0;
 # endif
 # ifdef VSWTCH
-	newtio.c_cc[VSWTCH] = 0;
+	//newio.c_cc[VSWTCH] = 0;
 # endif
 	newtio.c_cc[VSTART] = 0; /* Ctrl-q */
 	newtio.c_cc[VSTOP] = 0; /* Ctrl-s */
@@ -679,6 +680,15 @@ long get_time_difference(struct timeval *startTime)
 	return seconds * 1000 + nseconds / 1000;
 }
 
+#define clear_serial(n) \
+		tv_start.tv_sec = 0; \
+		tv_start.tv_usec = 0; \
+		serial_connected = 0; \
+		cleanup_fd(n); \
+		add_to_all_socket_fds(&aas_state, "\r\n"); \
+		add_to_all_socket_fds(&aas_state, SERIAL_DISCONNECTED_MSG); \
+		msleep(100); \
+
 /*
  this loop processes all of our fds'
  */
@@ -707,16 +717,6 @@ void listen_loop()
 	sched_setscheduler(0,SCHED_RR,&param);
 #endif
 
-	void clear_serial(int n)
-	{
-		tv_start.tv_sec = 0;
-		tv_start.tv_usec = 0;
-		serial_connected = 0;
-		cleanup_fd(n);
-		add_to_all_socket_fds(&aas_state, "\r\n");
-		add_to_all_socket_fds(&aas_state, SERIAL_DISCONNECTED_MSG);
-		msleep(100);
-	}
 
 	init_add_to_all_socket_fds_state(&aas_state);
 	tv_start.tv_sec = 0;
