@@ -12,6 +12,7 @@ CXX = arm-linux-gcc
 CXXFLAGS += -march=armv4 -pipe -Wall
 LDFLAGS += -static-libgcc -static -Wl,--gc-sections
 LDFLAGS += -Xlinker --gc-sections -s
+LDLIBS += -lssl
 
 SRCS = $(wildcard *.c)
 OBJS = $(SRCS:.c=.o)
