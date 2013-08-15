@@ -1577,7 +1577,7 @@ BOOL init_ssl()
 	OpenSSL_add_all_algorithms();
 
 	// Set up our SSL context.
-	sslctx = SSL_CTX_new(TLSv1_1_server_method());
+	sslctx = SSL_CTX_new(TLSv1_server_method());
 
     SSL_CTX_set_options(sslctx, SSL_OP_SINGLE_DH_USE);
 
