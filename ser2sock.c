@@ -1676,7 +1676,6 @@ int ssl_accept()
 
 void shutdown_ssl()
 {
-	BIO_free_all(bio);
 	BIO_free_all(abio);
     SSL_CTX_free(sslctx);
     ERR_free_strings();
@@ -1685,7 +1684,8 @@ void shutdown_ssl()
 
 void shutdown_ssl_conn(BIO* sslbio)
 {
-    BIO_free_all(sslbio);
+    BIO *tmp=BIO_pop(sslbio);
+    BIO_free_all(tmp);
 }
 
 /* </Code> */
