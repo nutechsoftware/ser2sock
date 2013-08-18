@@ -84,9 +84,9 @@ typedef int BOOL;
 #define SERIAL_CONNECTED_MSG	"!SER2SOCK SERIAL_CONNECTED\r\n"
 #define SERIAL_DISCONNECTED_MSG	"!SER2SOCK SERIAL_DISCONNECTED\r\n"
 
-#define SSL_SERVER_CERT "server.pem"
-#define SSL_SERVER_KEY "server.key"
-#define SSL_CA_CERT "ca.pem"
+#define SSL_SERVER_CERT "/etc/ser2sock/server.pem"
+#define SSL_SERVER_KEY "/etc/ser2sock/server.key"
+#define SSL_CA_CERT "/etc/ser2sock/ca.pem"
 
 /* <Types and Constants> */
 const char terminal_init_string[] = "\377\375\042";
