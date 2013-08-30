@@ -5,7 +5,7 @@ endif
 BINARY = ser2sock
 CXX = 
 DEFAULT_CXX = gcc
-CROSS_CXX = arm-linux-gnueabi-gcc
+CROSS_CXX = arm-linux-gcc
 
 DYNAMIC_CXXFLAGS = -DNDEBUG -O3 -ffunction-sections -fdata-sections -pipe -Wall -march=$(ARCH)
 DYNAMIC_LDFLAGS = 
