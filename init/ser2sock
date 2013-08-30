@@ -1,0 +1,70 @@
+#!/bin/bash
+
+# SER2SOCK
+
+### BEGIN INIT INFO
+#
+# Provides: ser2sock
+# Required-Start: $remote_fs
+# Required-Stop: $remote_fs
+# Default-Start: 2 3 4 5
+# Default-Stop: 0 1 6
+# Short-Description: init script for ser2sock
+# Description: This is the initialization script for ser2sock.
+#
+### END INIT INFO
+
+PORT=10000
+DEVICE=/dev/ttyAMA0
+OPTIONS=
+
+ser2sock=/usr/local/bin/ser2sock
+prog=ser2sock
+RETVAL=0
+
+BOLD=$(tput bold)
+GREEN=$(tput setaf 2)
+RED=$(tput setaf 1)
+NORMAL=$(tput sgr0)
+
+start() {
+    echo -n $"Starting $prog: "
+
+    $ser2sock -d -p $PORT -s $DEVICE $OPTIONS >/dev/null 2>&1
+    RETVAL=$?
+
+    if [ $RETVAL = 0 ]; then
+        echo "${BOLD}${GREEN}done${NORMAL}"
+    else
+        echo $"${BOLD}${RED}failed${NORMAL}"
+    fi
+
+    return $RETVAL
+}
+
+stop() {
+    echo $"Stopping $prog.."
+
+    killall $ser2sock
+    RETVAL=$?
+
+    return $RETVAL
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart)
+        stop
+        start
+        ;;
+    *)
+        echo $"Usage: $prog {start|stop|restart}"
+        exit 1
+esac
+
+exit $RETVAL
