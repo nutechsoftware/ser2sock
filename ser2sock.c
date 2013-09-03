@@ -1,4 +1,4 @@
-/******************************************************************************\ 
+/******************************************************************************\
  *
  *  MODULE: ser2sock.c
  *          Copyright (C) 2010 Nu Tech Software Solutions, Inc.
@@ -29,22 +29,24 @@
  *  DEVELOPED BY: Sean Mathews
  *                  http://www.nutech.com/
  *
- *	Thanks to Richard Perlman [ad2usb at perlman.com] for his help testing on
+ *      Thanks to Richard Perlman [ad2usb at perlman.com] for his help testing on
  *     bsd and excellent feedback on features. Also a big thanks to everyone
  *     that helped support the AD2USB project get off the ground.
  *
  *  REV INFO: ver 1.0   05/08/10 Initial release
  *		  1.1   05/18/10 Refining, looking for odd echo bug thanks Richard!
  *		  1.2   05/19/10 Adding daemon mode, bind to ip, debug output
- *                      syslog and more
+ *			syslog and more
  *		  1.2.4 01/17/11 Fixed a socket bug
- *        1.2.5 04/01/11 Working on issue on BSD systems
+ *		  1.2.5 04/01/11 Working on issue on BSD systems
  *		  1.3.0 05/16/11 Reestablishing connection with the serial device
  *		  1.3.1 04/27/12 fixed a few compiler issues with some systems
- *
+ *		  1.4.0 08/14/13 Added SSL support --SAP
+ *		  1.4.1 08/17/13 Add compiler switches cleanup tabification --SM
  *
  \******************************************************************************/
 #define _GNU_SOURCE
+
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -69,7 +71,17 @@
 #include <sched.h>
 #endif
 
-#define SER2SOCK_VERSION "V1.3.1"
+#ifdef SSL_SUPPORT
+#include <openssl/bio.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+
+#define SSL_SERVER_CERT "/etc/ser2sock/server.pem"
+#define SSL_SERVER_KEY "/etc/ser2sock/server.key"
+#define SSL_CA_CERT "/etc/ser2sock/ca.pem"
+#endif
+
+#define SER2SOCK_VERSION "V1.4.1"
 #define TRUE 1
 #define FALSE 0
 typedef int BOOL;
@@ -128,7 +140,10 @@ typedef struct
 
 	/* the fd */
 	int fd;
-
+#ifdef SSL_SUPPORT
+	/* SSL descriptor */
+	BIO* ssl;
+#endif
 	/* persistent settings */
 	struct termios oldtio;
 
@@ -180,6 +195,13 @@ int fifo_add(fifo *f, void *next);
 void* fifo_get(fifo *f);
 void fifo_clear(fifo *f);
 static void writepid(void);
+
+#ifdef SSL_SUPPORT
+BOOL init_ssl();
+int ssl_accept();
+void shutdown_ssl();
+void shutdown_ssl_conn(BIO* sslbio);
+#endif
 /* </Prototypes> */
 
 /* <Globals> */
@@ -202,11 +224,17 @@ BOOL option_send_terminal_init = FALSE;
 int option_debug_level = 0;
 BOOL option_keep_connection = FALSE;
 int option_open_serial_delay = 5000;
+
+#ifdef SSL_SUPPORT
+BOOL option_ssl = FALSE;
+SSL_CTX* sslctx = 0;
+BIO* bio = 0, *abio = 0;
+#endif
 /* </Globals> */
 
 /* <Code> */
 
-/* 
+/*
  show our error message and die
  todo: add params.
  */
@@ -263,7 +291,7 @@ void vlog_message(char *msg, va_list arg)
 		}
 }
 
-/* 
+/*
  nanosecond sleep
  */
 int __nsleep(const struct timespec *req, struct timespec *rem)
@@ -274,7 +302,7 @@ int __nsleep(const struct timespec *req, struct timespec *rem)
 	return TRUE;
 }
 
-/* 
+/*
  sleep for N milliseconds
  */
 int msleep(unsigned long milisec)
@@ -290,7 +318,7 @@ int msleep(unsigned long milisec)
 	return 1;
 }
 
-/* 
+/*
  show help info
  */
 void show_help(const char *appName)
@@ -309,6 +337,9 @@ void show_help(const char *appName)
 				"  -g                        debug level 0-3\n"
 				"  -c                        keep incoming connections when a serial device is disconnected\n"
 				"  -w milliseconds           delay between attempts to open a serial device (5000)\n"
+#ifdef SSL_SUPPORT
+				"  -e                        use SSL to encrypt the connection\n"
+#endif
 				"\n", appName);
 }
 
@@ -324,6 +355,9 @@ int init_system()
 		my_fds[x].new = TRUE;
 		my_fds[x].fd = -1;
 		my_fds[x].fd_type = NA;
+#ifdef SSL_SUPPORT
+		my_fds[x].ssl = 0;
+#endif
 		fifo_init(&my_fds[x].send_buffer, MAX_FIFO_BUFFERS);
 	}
 
@@ -350,6 +384,10 @@ int free_system()
 		cleanup_fd(x);
 		fifo_destroy(&my_fds[x].send_buffer);
 	}
+#ifdef SSL_SUPPORT
+	if (option_ssl)
+		shutdown_ssl();
+#endif
 	return TRUE;
 }
 
@@ -360,54 +398,65 @@ int init_listen_socket_fd()
 {
 	BOOL bOptionTrue = TRUE;
 	int results;
+#ifdef SSL_SUPPORT
+	SSL* ssl;
 
-	/* create a listening socket fd */
-	listen_sock_fd = socket(AF_INET, SOCK_STREAM, 0);
-	if (listen_sock_fd < 0)
+	if (option_ssl)
 	{
-		log_message("ERROR creating our listening socket");
-		return FALSE;
-	}
-
-	/* clear our socket address structure */
-	bzero((char *) &serv_addr, sizeof(serv_addr));
-
-	if (option_bind_ip != NULL)
-	{
-		results = inet_pton(AF_INET, option_bind_ip, &serv_addr.sin_addr);
-		if (results != 1)
-		{
-			log_message("ERROR unable to bind to provided IP %s",
-					option_bind_ip);
+		if (!init_ssl())
 			return FALSE;
-		}
 	}
 	else
+#endif
 	{
-		serv_addr.sin_addr.s_addr = INADDR_ANY;
+		/* create a listening socket fd */
+		listen_sock_fd = socket(AF_INET, SOCK_STREAM, 0);
+		if (listen_sock_fd < 0)
+		{
+			log_message("ERROR creating our listening socket");
+			return FALSE;
+		}
+
+		/* clear our socket address structure */
+		bzero((char *) &serv_addr, sizeof(serv_addr));
+
+		if (option_bind_ip != NULL)
+		{
+			results = inet_pton(AF_INET, option_bind_ip, &serv_addr.sin_addr);
+			if (results != 1)
+			{
+				log_message("ERROR unable to bind to provided IP %s",
+						option_bind_ip);
+				return FALSE;
+			}
+		}
+		else
+		{
+			serv_addr.sin_addr.s_addr = INADDR_ANY;
+		}
+
+		serv_addr.sin_family = AF_INET;
+
+		serv_addr.sin_port = htons(listen_port);
+
+		setsockopt(listen_sock_fd, SOL_SOCKET, SO_SNDTIMEO,
+				(char *) &socket_timeout, sizeof(socket_timeout));
+		setsockopt(listen_sock_fd, SOL_SOCKET, SO_RCVTIMEO,
+				(char *) &socket_timeout, sizeof(socket_timeout));
+		setsockopt(listen_sock_fd, SOL_SOCKET, SO_REUSEADDR, (char *) &bOptionTrue,
+				sizeof(bOptionTrue));
+
+		if (bind(listen_sock_fd, (struct sockaddr *) &serv_addr, sizeof(serv_addr))
+				< 0)
+		{
+			log_message("ERROR binding to server port");
+			return FALSE;
+		}
+
+		listen(listen_sock_fd, listen_backlog);
+
+		set_non_blocking(listen_sock_fd);
 	}
-
-	serv_addr.sin_family = AF_INET;
-
-	serv_addr.sin_port = htons(listen_port);
-
-	setsockopt(listen_sock_fd, SOL_SOCKET, SO_SNDTIMEO,
-			(char *) &socket_timeout, sizeof(socket_timeout));
-	setsockopt(listen_sock_fd, SOL_SOCKET, SO_RCVTIMEO,
-			(char *) &socket_timeout, sizeof(socket_timeout));
-	setsockopt(listen_sock_fd, SOL_SOCKET, SO_REUSEADDR, (char *) &bOptionTrue,
-			sizeof(bOptionTrue));
-
-	if (bind(listen_sock_fd, (struct sockaddr *) &serv_addr, sizeof(serv_addr))
-			< 0)
-	{
-		log_message("ERROR binding to server port");
-		return FALSE;
-	}
-
-	listen(listen_sock_fd, listen_backlog);
-
-	set_non_blocking(listen_sock_fd);
 
 	add_fd(listen_sock_fd, LISTEN_SOCKET);
 
@@ -594,7 +643,7 @@ int get_baud(char * szbaud)
 	return s->flag;
 }
 
-/* 
+/*
  Makes a fd non blocking after opening
  */
 void set_non_blocking(int fd)
@@ -650,7 +699,10 @@ int cleanup_fd(int n)
 		{
 			tcsetattr(my_fds[n].fd, TCSANOW, &my_fds[n].oldtio);
 		}
-
+#ifdef SSL_SUPPORT
+		if (my_fds[n].ssl != NULL)
+			shutdown_ssl_conn(my_fds[n].ssl);
+#endif
 		/* close the fd */
 		close(my_fds[n].fd);
 
@@ -699,7 +751,7 @@ void listen_loop()
 	int added_id, tmp;
 	byte_t *tempbuffer;
 	byte_t buffer[1024];
-	int n, x, fd_count, received;
+	int n, x, fd_count, received, written;
 	char is_serviced;
 	fd_set read_fdset, write_fdset, except_fdset;
 	clilen = sizeof(struct sockaddr_in);
@@ -747,7 +799,7 @@ void listen_loop()
 			else
 				msleep(10);
 
-		} else 
+		} else
 		{
 			if ((tv_last_serial_check.tv_sec == 0) || (get_time_difference(
 					&tv_last_serial_check) >= 100))
@@ -830,15 +882,31 @@ void listen_loop()
 						/* if this is a listening socket then we accept on it and get a new client socket */
 						if (my_fds[n].fd_type == LISTEN_SOCKET)
 						{
-							newsockfd = accept(listen_sock_fd,
-									(struct sockaddr *) &peer_addr, &clilen);
+#ifdef SSL_SUPPORT
+							if (option_ssl)
+							{
+								newsockfd = ssl_accept();
+								if (newsockfd == -1)
+									continue;
+							}
+							else
+#endif
+							{
+								newsockfd = accept(listen_sock_fd, (struct sockaddr *) &peer_addr, &clilen);
+							}
 							if (newsockfd != -1)
 							{
 								if (serial_connected || option_keep_connection)
 								{
-									added_id = add_fd(newsockfd, CLIENT_SOCKET);
+#ifdef SSL_SUPPORT
+									if (!option_ssl)
+#endif
+									{
+										added_id = add_fd(newsockfd, CLIENT_SOCKET);
+									}
 									if (added_id >= 0)
 									{
+
 										log_message("socket connected\n");
 										/* adding anything to the fifo must be pre allocated */
 										if (option_send_terminal_init)
@@ -936,8 +1004,18 @@ void listen_loop()
 							else
 							{
 								errno = 0;
-								received = recv(my_fds[n].fd, buffer,
-										sizeof(buffer), 0);
+#ifdef SSL_SUPPORT
+								if (option_ssl)
+								{
+									received = BIO_read(my_fds[n].ssl, buffer, sizeof(buffer));
+									if (received <= 0 && BIO_should_retry(my_fds[n].ssl))
+											continue;
+								}
+								else
+#endif
+								{
+									received = recv(my_fds[n].fd, buffer, sizeof(buffer), 0);
+								}
 								if (received == 0)
 								{
 									log_message("closing socket errno: %i\n",
@@ -992,8 +1070,18 @@ void listen_loop()
 								is_serviced = 1;
 								if (option_debug_level > 2)
 									log_message("SOCKET[%i]<", n);
-								send(my_fds[n].fd, tempbuffer, strlen(
-										tempbuffer), 0);
+#ifdef SSL_SUPPORT
+								if (option_ssl)
+								{
+									written = BIO_write(my_fds[n].ssl, tempbuffer, strlen(tempbuffer));
+									if (written <= 0 && BIO_should_retry(my_fds[n].ssl))
+										continue;
+								}
+								else
+#endif
+								{
+									send(my_fds[n].fd, tempbuffer, strlen(tempbuffer), 0);
+								}
 							}
 							else
 								if (my_fds[n].fd_type == SERIAL)
@@ -1056,7 +1144,7 @@ void init_add_to_all_socket_fds_state(
 {
 	state->line_ended = 0;
 }
-/* 
+/*
  add_to_all_socket_fds
  adds a buffer to ever connected socket fd ie multiplexes
  */
@@ -1136,7 +1224,7 @@ void add_to_serial_fd(char *message)
 	}
 }
 
-/* 
+/*
  skip over ' ' if the add one to the option
  */
 int skip_param(char *buf)
@@ -1208,6 +1296,11 @@ int parse_args(int argc, char * argv[])
 				case 'c':
 					option_keep_connection = TRUE;
 					break;
+#ifdef SSL_SUPPORT
+				case 'e':
+					option_ssl = TRUE;
+					break;
+#endif
 
 				default:
 					show_help(argv[0]);
@@ -1229,7 +1322,7 @@ int parse_args(int argc, char * argv[])
 }
 
 /*
- writepid 
+ writepid
  */
 static void writepid(void)
 {
@@ -1370,7 +1463,7 @@ void signal_handler(int sig)
 	}
 }
 
-/* 
+/*
  good old kbhit function just like back in the day
  */
 int kbhit(void)
@@ -1416,7 +1509,7 @@ void fifo_init(fifo *f, int size)
 	f->table = (void**) malloc(f->size * sizeof(void*));
 }
 
-/* 
+/*
  fifo empty if queue = 1 else 0
  */
 int fifo_empty(fifo *f)
@@ -1424,7 +1517,7 @@ int fifo_empty(fifo *f)
 	return (f->avail == 0);
 }
 
-/* 
+/*
  free up any memory we allocated
  */
 void fifo_destroy(fifo *f)
@@ -1443,7 +1536,7 @@ void fifo_destroy(fifo *f)
 	}
 }
 
-/* 
+/*
  remove all stored pending data
  */
 void fifo_clear(fifo *f)
@@ -1463,7 +1556,7 @@ void fifo_clear(fifo *f)
 		log_message(" done.\n");
 }
 
-/* 
+/*
  insert an element
  this must be already allocated with malloc or strdup
  */
@@ -1482,7 +1575,7 @@ int fifo_add(fifo *f, void *next)
 	}
 }
 
-/* 
+/*
  return next element
  */
 void* fifo_get(fifo *f)
@@ -1500,4 +1593,126 @@ void* fifo_get(fifo *f)
 
 //</Fifo Buffer>
 
+#ifdef SSL_SUPPORT
+BOOL init_ssl()
+{
+	SSL* ssl;
+	char port_string[256];
+
+	// Initialize SSL
+	SSL_load_error_strings();
+	SSL_library_init();
+	OpenSSL_add_all_algorithms();
+
+	// Set up our SSL context.
+	sslctx = SSL_CTX_new(TLSv1_server_method());
+
+	SSL_CTX_set_options(sslctx, SSL_OP_SINGLE_DH_USE);
+
+	// Load our certificates
+	int use_cert = SSL_CTX_use_certificate_file(sslctx, SSL_SERVER_CERT , SSL_FILETYPE_PEM);
+	if (use_cert <= 0)
+	{
+		log_message("Loading certificate failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
+		return FALSE;
+	}
+
+	int use_prv = SSL_CTX_use_PrivateKey_file(sslctx, SSL_SERVER_KEY, SSL_FILETYPE_PEM);
+	if (use_prv <= 0)
+	{
+		log_message("Loading private key failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
+		return FALSE;
+	}
+
+	/* Load trusted CA. */
+	if (!SSL_CTX_load_verify_locations(sslctx, SSL_CA_CERT ,NULL))
+	{
+		log_message("Loading CA cert failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
+		return FALSE;
+	}
+
+	/* Set to require peer (client) certificate verification */
+	SSL_CTX_set_verify(sslctx, SSL_VERIFY_PEER, NULL);
+
+	/* Set the verification depth to 1 */
+	SSL_CTX_set_verify_depth(sslctx, 1);
+
+	// Set everything up to serve.
+	bio = BIO_new_ssl(sslctx, 0);
+	BIO_get_ssl(bio, &ssl);
+	SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY);
+	BIO_set_nbio(bio, 1);	// Non-blocking on.
+
+	sprintf(port_string, "%d", listen_port);
+	abio = BIO_new_accept(port_string);
+	BIO_set_accept_bios(abio, bio);
+	BIO_set_nbio(abio, 1);
+
+	// NOTE: This first accept is required.
+	if (BIO_do_accept(abio) <= 0)
+	{
+		log_message("SSL accept-1 failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
+		return FALSE;
+	}
+
+	// Save our listening socket descriptor.
+	BIO_get_fd(abio, &listen_sock_fd);
+
+	return TRUE;
+}
+
+int ssl_accept()
+{
+	BIO* newbio = 0;
+	int newsockfd = -1;
+	int added_id = -1;
+
+	// Accept the connection
+	if (BIO_do_accept(abio) <= 0)
+	{
+		log_message("SSL accept-2 failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
+		return -1;
+	}
+
+	// Grab our actual working BIO.
+	newbio = BIO_pop(abio);
+	if (!newbio)
+	{
+		log_message("Could not pop SSL BIO.");
+		return -1;
+	}
+
+	// Save the descriptors for later use.
+	BIO_get_fd(newbio, &newsockfd);
+	added_id = add_fd(newsockfd, CLIENT_SOCKET);
+	my_fds[added_id].ssl = newbio;
+
+	// SSL handshake.
+	if (BIO_do_handshake(newbio) <= 0)
+	{
+		if (!BIO_should_retry(newbio))
+		{
+			log_message("SSL handshake failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
+			cleanup_fd(added_id);
+		}
+		return -1;
+	}
+
+	return added_id;
+}
+
+void shutdown_ssl()
+{
+	BIO_free_all(abio);
+	SSL_CTX_free(sslctx);
+	ERR_free_strings();
+	EVP_cleanup();
+}
+
+void shutdown_ssl_conn(BIO* sslbio)
+{
+	BIO *tmp=BIO_pop(sslbio);
+	BIO_free_all(tmp);
+}
+#endif
 /* </Code> */
