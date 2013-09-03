@@ -46,7 +46,7 @@
  *
  \******************************************************************************/
 #define _GNU_SOURCE
-#define SSL_SUPPORT
+
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -70,9 +70,16 @@
 #ifdef _POSIX_SOURCE
 #include <sched.h>
 #endif
+
+#ifdef SSL_SUPPORT
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+
+#define SSL_SERVER_CERT "/etc/ser2sock/server.pem"
+#define SSL_SERVER_KEY "/etc/ser2sock/server.key"
+#define SSL_CA_CERT "/etc/ser2sock/ca.pem"
+#endif
 
 #define SER2SOCK_VERSION "V1.4.1"
 #define TRUE 1
@@ -84,10 +91,6 @@ typedef int BOOL;
 
 #define SERIAL_CONNECTED_MSG	"!SER2SOCK SERIAL_CONNECTED\r\n"
 #define SERIAL_DISCONNECTED_MSG	"!SER2SOCK SERIAL_DISCONNECTED\r\n"
-
-#define SSL_SERVER_CERT "/etc/ser2sock/server.pem"
-#define SSL_SERVER_KEY "/etc/ser2sock/server.key"
-#define SSL_CA_CERT "/etc/ser2sock/ca.pem"
 
 /* <Types and Constants> */
 const char terminal_init_string[] = "\377\375\042";
@@ -192,8 +195,8 @@ int fifo_add(fifo *f, void *next);
 void* fifo_get(fifo *f);
 void fifo_clear(fifo *f);
 static void writepid(void);
+
 #ifdef SSL_SUPPORT
-// ssl
 BOOL init_ssl();
 int ssl_accept();
 void shutdown_ssl();
@@ -223,7 +226,6 @@ BOOL option_keep_connection = FALSE;
 int option_open_serial_delay = 5000;
 
 #ifdef SSL_SUPPORT
-// SSL
 BOOL option_ssl = FALSE;
 SSL_CTX* sslctx = 0;
 BIO* bio = 0, *abio = 0;
@@ -396,8 +398,9 @@ int init_listen_socket_fd()
 {
 	BOOL bOptionTrue = TRUE;
 	int results;
-	SSL* ssl;
 #ifdef SSL_SUPPORT
+	SSL* ssl;
+
 	if (option_ssl)
 	{
 		if (!init_ssl())
@@ -1589,6 +1592,7 @@ void* fifo_get(fifo *f)
 }
 
 //</Fifo Buffer>
+
 #ifdef SSL_SUPPORT
 BOOL init_ssl()
 {
