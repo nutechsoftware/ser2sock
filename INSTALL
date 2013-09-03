@@ -1,0 +1,5 @@
+1. make
+2. sudo cp ser2sock /usr/local/bin/
+3. sudo cp init/ser2sock /etc/init.d/
+4. sudo update-rc.d ser2sock defaults
+5. sudo /etc/init.d/ser2sock start
