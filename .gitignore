@@ -1,3 +1,4 @@
+ser2sock
 *.o
 *.pem
 *.key
