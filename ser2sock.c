@@ -43,6 +43,7 @@
  *		  1.3.1 04/27/12 fixed a few compiler issues with some systems
  *		  1.4.0 08/14/13 Added SSL support --SAP
  *		  1.4.1 08/17/13 Add compiler switches cleanup tabification --SM
+ *		  1.4.2 09/05/13 Added configuration support. --SAP
  *
  \******************************************************************************/
 #define _GNU_SOURCE
@@ -67,6 +68,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <arpa/inet.h>
+#include <ctype.h>
 #ifdef _POSIX_SOURCE
 #include <sched.h>
 #endif
@@ -75,10 +77,6 @@
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
-
-#define SSL_SERVER_CERT "/etc/ser2sock/server.pem"
-#define SSL_SERVER_KEY "/etc/ser2sock/server.key"
-#define SSL_CA_CERT "/etc/ser2sock/ca.pem"
 #endif
 
 #define SER2SOCK_VERSION "V1.4.1"
@@ -91,6 +89,8 @@ typedef int BOOL;
 
 #define SERIAL_CONNECTED_MSG	"!SER2SOCK SERIAL_CONNECTED\r\n"
 #define SERIAL_DISCONNECTED_MSG	"!SER2SOCK SERIAL_DISCONNECTED\r\n"
+
+#define CONFIG_PATH "/etc/ser2sock/ser2sock.conf"
 
 /* <Types and Constants> */
 const char terminal_init_string[] = "\377\375\042";
@@ -187,6 +187,8 @@ int __nsleep(const struct timespec *req, struct timespec *rem);
 int msleep(unsigned long milisec);
 void show_help();
 void signal_handler(int sig);
+BOOL read_config(char* filename);
+
 // fifo buffer stuff
 void fifo_init(fifo *f, int size);
 void fifo_destroy(fifo *f);
@@ -229,6 +231,9 @@ int option_open_serial_delay = 5000;
 BOOL option_ssl = FALSE;
 SSL_CTX* sslctx = 0;
 BIO* bio = 0, *abio = 0;
+char* option_ca_certificate = NULL;
+char* option_ssl_certificate = NULL;
+char* option_ssl_key = NULL;
 #endif
 /* </Globals> */
 
@@ -1345,6 +1350,8 @@ static void writepid(void)
  */
 int main(int argc, char *argv[])
 {
+	BOOL config_read = read_config(CONFIG_PATH);
+
 	/* parse args and set global vars as needed */
 	parse_args(argc, argv);
 
@@ -1357,7 +1364,7 @@ int main(int argc, char *argv[])
 
 	/* startup banner and args check */
 	log_message("Serial 2 Socket Relay version %s starting\n", SER2SOCK_VERSION);
-	if (argc < 2)
+	if (!config_read && argc < 2)
 	{
 		show_help(argv[0]);
 		log_message("ERROR insufficient arguments\n");
@@ -1461,6 +1468,126 @@ void signal_handler(int sig)
 			syslog(LOG_WARNING, "Unhandled signal (%d) %s", sig, strsignal(sig));
 			break;
 	}
+}
+
+/*
+ Configuration parsing
+ */
+
+char* trim(char* string)
+{
+	char* end = 0;
+
+	while(isspace(*string)) string++;
+
+	if (*string == 0)
+		return string;
+
+	end = string + strlen(string) - 1;
+
+	while(isspace(*end)) end--;
+
+	*(end + 1) = 0;
+
+	return string;
+}
+
+BOOL read_config(char* filename)
+{
+	FILE* fp = NULL;
+	char buffer[256];
+
+	char* bufp = NULL;
+	char* opt = NULL;
+	char* optdata = NULL;
+
+	if ((fp = fopen(filename, "r")) != NULL)
+	{
+		log_message("Using config file: %s\n", filename);
+
+		while (!feof(fp))
+		{
+			if (fgets(buffer, 256, fp))
+			{
+				bufp = trim(buffer);
+
+				// skip comments.
+				if(bufp[0] == '#')
+					continue;
+
+				// Split on =
+				opt = strtok(bufp, "=");
+				if (opt)
+				{
+					opt = trim(opt);
+					optdata = strtok(NULL, "=");
+
+					if (optdata)
+					{
+						optdata = trim(optdata);
+
+						if (!strcmp(opt, "daemonize"))
+						{
+							option_daemonize = atoi(optdata);
+						}
+						else if (!strcmp(opt, "port"))
+						{
+							listen_port = atoi(optdata);
+						}
+						else if (!strcmp(opt, "device"))
+						{
+							serial_device_name = strdup(optdata);
+						}
+						else if (!strcmp(opt, "bind_ip"))
+						{
+							option_bind_ip = strdup(optdata);
+						}
+						else if (!strcmp(opt, "baudrate"))
+						{
+							option_baud_rate = strdup(optdata);
+						}
+						else if (!strcmp(opt, "send_terminal_init"))
+						{
+							option_send_terminal_init = atoi(optdata);
+						}
+						else if (!strcmp(opt, "preserve_connections"))
+						{
+							option_keep_connection = atoi(optdata);
+						}
+						else if (!strcmp(opt, "device_open_delay"))
+						{
+							option_open_serial_delay = atoi(optdata);
+						}
+
+#ifdef SSL_SUPPORT
+						else if (!strcmp(opt, "encrypted"))
+						{
+							option_ssl = atoi(optdata);
+						}
+						else if (!strcmp(opt, "ca_certificate"))
+						{
+							option_ca_certificate = strdup(optdata);
+						}
+						else if (!strcmp(opt, "ssl_certificate"))
+						{
+							option_ssl_certificate = strdup(optdata);
+						}
+						else if (!strcmp(opt, "ssl_key"))
+						{
+							option_ssl_key = strdup(optdata);
+						}
+#endif
+					}
+				}
+			}
+		}
+
+		fclose(fp);
+
+		return TRUE;
+	}
+
+	return FALSE;
 }
 
 /*
@@ -1610,14 +1737,14 @@ BOOL init_ssl()
 	SSL_CTX_set_options(sslctx, SSL_OP_SINGLE_DH_USE);
 
 	// Load our certificates
-	int use_cert = SSL_CTX_use_certificate_file(sslctx, SSL_SERVER_CERT , SSL_FILETYPE_PEM);
+	int use_cert = SSL_CTX_use_certificate_file(sslctx, option_ssl_certificate , SSL_FILETYPE_PEM);
 	if (use_cert <= 0)
 	{
 		log_message("Loading certificate failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
 		return FALSE;
 	}
 
-	int use_prv = SSL_CTX_use_PrivateKey_file(sslctx, SSL_SERVER_KEY, SSL_FILETYPE_PEM);
+	int use_prv = SSL_CTX_use_PrivateKey_file(sslctx, option_ssl_key, SSL_FILETYPE_PEM);
 	if (use_prv <= 0)
 	{
 		log_message("Loading private key failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
@@ -1625,7 +1752,7 @@ BOOL init_ssl()
 	}
 
 	/* Load trusted CA. */
-	if (!SSL_CTX_load_verify_locations(sslctx, SSL_CA_CERT ,NULL))
+	if (!SSL_CTX_load_verify_locations(sslctx, option_ca_certificate, NULL))
 	{
 		log_message("Loading CA cert failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
 		return FALSE;

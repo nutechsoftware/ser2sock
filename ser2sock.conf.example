@@ -1,0 +1,38 @@
+# ser2sock sample configuration
+#
+
+# Fork into the background?  Default: 0
+daemonize = 1
+
+# Serial device
+device = /dev/ttyAMA0
+
+# Serial device baudrate
+baudrate = 115200
+
+# Port to listen for connections on.  Default: 10000
+port = 10000
+
+# Enable encryption?  Default: 0
+#encrypted = 1
+
+# CA certificate for this install
+#ca_certificate = /etc/ser2sock/ca.pem
+
+# SSL certificate
+#ssl_certificate = /etc/ser2sock/server.pem
+
+# SSL key
+#ssl_key = /etc/ser2sock/server.key
+
+# Allow binding only to a specific interface.  Default: 0.0.0.0
+#bind_ip = 127.0.0.1
+
+# Send terminal init string.  Default: 0
+#send_terminal_init = 0
+
+# Keep incoming connections open when the serial device is disconnected?  Default: 0
+#preserve_connections = 0
+
+# Delay (in milliseconds) between attempts to open the serial device.  Default: 5000
+#device_open_delay = 5000
