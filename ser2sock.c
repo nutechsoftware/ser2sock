@@ -1511,8 +1511,8 @@ BOOL read_config(char* filename)
 			{
 				bufp = trim(buffer);
 
-				// skip comments.
-				if(bufp[0] == '#')
+				// skip comments and section headers
+				if(bufp[0] == '#' || bufp[0] == ';' || bufp[0] == '[')
 					continue;
 
 				// Split on =
