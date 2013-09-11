@@ -1,7 +1,7 @@
 # ser2sock sample configuration
 #
 
-[ad2usb]
+[ser2sock]
 # Fork into the background?  Default: 0
 daemonize = 1
 
