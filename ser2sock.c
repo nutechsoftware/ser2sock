@@ -208,6 +208,7 @@ void shutdown_ssl_conn(BIO* sslbio);
 
 /* <Globals> */
 // soon to be params or config values
+volatile sig_atomic_t got_hup = 0;
 char * serial_device_name = 0;
 int listen_port = 10000;
 int socket_timeout = 10;
@@ -369,12 +370,15 @@ int init_system()
 	/* Setup signal handling if we are to daemonize */
 	if (option_daemonize)
 	{
-		signal(SIGHUP, signal_handler);
 		signal(SIGTERM, signal_handler);
 		signal(SIGINT, signal_handler);
 		signal(SIGQUIT, signal_handler);
 		setlogmask(LOG_UPTO(LOG_DEBUG));
 	}
+
+	// HUP is always bound.
+	signal(SIGHUP, signal_handler);
+
 	return TRUE;
 }
 
@@ -403,6 +407,7 @@ int init_listen_socket_fd()
 {
 	BOOL bOptionTrue = TRUE;
 	int results;
+	struct linger solinger;
 #ifdef SSL_SUPPORT
 	SSL* ssl;
 
@@ -450,6 +455,10 @@ int init_listen_socket_fd()
 				(char *) &socket_timeout, sizeof(socket_timeout));
 		setsockopt(listen_sock_fd, SOL_SOCKET, SO_REUSEADDR, (char *) &bOptionTrue,
 				sizeof(bOptionTrue));
+
+		solinger.l_onoff = TRUE;
+		solinger.l_linger = 0;
+		setsockopt(listen_sock_fd, SOL_SOCKET, SO_LINGER, &solinger, sizeof(solinger));
 
 		if (bind(listen_sock_fd, (struct sockaddr *) &serv_addr, sizeof(serv_addr))
 				< 0)
@@ -668,6 +677,8 @@ int add_fd(int fd, int fd_type)
 	int s = 0;
 	int x;
 	int results = -1;
+	struct linger solinger;
+
 	// Reserve two first sockets for serial & listen
 	if (fd_type == CLIENT_SOCKET)
 		s = 2;
@@ -677,6 +688,14 @@ int add_fd(int fd, int fd_type)
 		{
 			if (option_debug_level > 2)
 				log_message("adding %s fd at %i\n", fd_type_strings[fd_type], x);
+
+			if (fd_type != SERIAL)
+			{
+				solinger.l_onoff = TRUE;
+				solinger.l_linger = 0;
+				setsockopt(fd, SOL_SOCKET, SO_LINGER, &solinger, sizeof(solinger));
+			}
+
 			my_fds[x].inuse = TRUE;
 			my_fds[x].fd_type = fd_type;
 			my_fds[x].fd = fd;
@@ -704,6 +723,7 @@ int cleanup_fd(int n)
 		{
 			tcsetattr(my_fds[n].fd, TCSANOW, &my_fds[n].oldtio);
 		}
+
 #ifdef SSL_SUPPORT
 		if (my_fds[n].ssl != NULL)
 			shutdown_ssl_conn(my_fds[n].ssl);
@@ -784,6 +804,22 @@ void listen_loop()
 	log_message("Start wait loop\n");
 	while (!kbhit())
 	{
+		if (got_hup)
+		{
+			got_hup = 0;
+
+			for (n = 0; n < MAXCONNECTIONS; n++)
+			{
+				if (my_fds[n].inuse == TRUE && my_fds[n].fd_type == SERIAL)
+					clear_serial(n);
+			}
+
+			free_system();
+			read_config(CONFIG_PATH);
+			init_system();
+			init_listen_socket_fd();
+		}
+
 		if (!serial_connected)
 		{
 			if ((tv_start.tv_sec == 0) || (get_time_difference(&tv_start)
@@ -1451,11 +1487,8 @@ void signal_handler(int sig)
 	switch (sig)
 	{
 		case SIGHUP:
-			syslog(LOG_WARNING, "Received SIGHUP signal.");
-			log_message("cleaning up\n");
-			free_system();
-			log_message("done.\n");
-			exit(EXIT_SUCCESS);
+			syslog(LOG_INFO, "Received SIGHUP signal.");
+			got_hup = 1;
 			break;
 		case SIGTERM:
 			syslog(LOG_WARNING, "Received SIGTERM signal.");
