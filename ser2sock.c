@@ -1758,6 +1758,8 @@ BOOL init_ssl()
 {
 	SSL* ssl;
 	char port_string[256];
+	int use_cert = 0;
+	int use_prv = 0;
 
 	// Initialize SSL
 	SSL_load_error_strings();
@@ -1770,31 +1772,34 @@ BOOL init_ssl()
 	SSL_CTX_set_options(sslctx, SSL_OP_SINGLE_DH_USE);
 
 	// Load our certificates
-	int use_cert = SSL_CTX_use_certificate_file(sslctx, option_ssl_certificate , SSL_FILETYPE_PEM);
+	use_cert = SSL_CTX_use_certificate_file(sslctx, option_ssl_certificate , SSL_FILETYPE_PEM);
 	if (use_cert <= 0)
 	{
 		log_message("Loading certificate failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
 		return FALSE;
 	}
 
-	int use_prv = SSL_CTX_use_PrivateKey_file(sslctx, option_ssl_key, SSL_FILETYPE_PEM);
+	use_prv = SSL_CTX_use_PrivateKey_file(sslctx, option_ssl_key, SSL_FILETYPE_PEM);
 	if (use_prv <= 0)
 	{
 		log_message("Loading private key failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
 		return FALSE;
 	}
 
-	/* Load trusted CA. */
+	// Specify required CAs
+	SSL_CTX_set_client_CA_list(sslctx, SSL_load_client_CA_file(option_ca_certificate));
+
+	// Load trusted CA.
 	if (!SSL_CTX_load_verify_locations(sslctx, option_ca_certificate, NULL))
 	{
 		log_message("Loading CA cert failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
 		return FALSE;
 	}
 
-	/* Set to require peer (client) certificate verification */
-	SSL_CTX_set_verify(sslctx, SSL_VERIFY_PEER, NULL);
+	// Set to require peer (client) certificate verification
+	SSL_CTX_set_verify(sslctx, SSL_VERIFY_PEER|SSL_VERIFY_FAIL_IF_NO_PEER_CERT, NULL);
 
-	/* Set the verification depth to 1 */
+	// Set the verification depth to 1
 	SSL_CTX_set_verify_depth(sslctx, 1);
 
 	// Set everything up to serve.
