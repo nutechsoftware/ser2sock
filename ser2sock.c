@@ -41,6 +41,7 @@
  *		  1.2.5 04/01/11 Working on issue on BSD systems
  *		  1.3.0 05/16/11 Reestablishing connection with the serial device
  *		  1.3.1 04/27/12 fixed a few compiler issues with some systems
+ *		  1.3.2 08/28/13 improvments in syslog formats
  *		  1.4.0 08/14/13 Added SSL support --SAP
  *		  1.4.1 08/17/13 Add compiler switches cleanup tabification --SM
  *		  1.4.2 09/05/13 Added configuration support. --SAP
@@ -278,23 +279,53 @@ void vlog_message(char *msg, va_list arg)
 {
 	static char message[2048];
 	static int last = 0;
+	int x,y,z=0;
+	BOOL done=FALSE;
 	last += vsnprintf(&message[last], sizeof(message) - last, msg, arg);
 
+	/* check for overflow error */
 	if (last >= sizeof(message))
 		last = 0;
-	if (last)
-		if (message[last - 1] == '\n')
+
+	if (last) {
+		/* keep trying till we exause all \n's */
+		while(!done)
 		{
-			if (option_daemonize)
-			{
-				syslog(LOG_INFO, "%s", message);
+			/* look for an eol char */
+			for (x = 0; x < last ; x++) {
+
+				if(message[x] == '\n' || message[x] == '\r') {
+
+					message[x]=0;
+					if(x)
+					if (option_daemonize)
+					{
+						syslog(LOG_INFO, "%s", message);
+					}
+					else
+					{
+						fprintf(stderr, "%s\n", message);
+					}
+
+					/* move the rest to the start and clean out any non printable chars */ 
+					z = 0;
+					for(y = x+1; y < last ; y++) {
+						if((message[y]>0x1f && message[y]<0x7f) || message[y]=='\n') {
+							message[z++]=message[y];
+						}
+					}
+
+					/* set our next fill position */
+					last = z;
+
+					/* again */
+					break;
+				}
 			}
-			else
-			{
-				fprintf(stderr, "%s", message);
-			}
-			last = 0;
+			/* ok we reached the end of our buffer and found no more \n's */
+			done = TRUE; 
 		}
+	}
 }
 
 /*
@@ -1021,12 +1052,12 @@ void listen_loop()
 													log_message("[%02x]",
 															buffer[x]);
 												}
+												log_message("\n");
 											}
 											else
 											{
 												log_message("%s", buffer);
 											}
-											log_message("\n");
 										}
 									}
 								}
