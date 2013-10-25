@@ -1,7 +1,7 @@
 /******************************************************************************\
  *
  *  MODULE: ser2sock.c
- *          Copyright (C) 2010 Nu Tech Software Solutions, Inc.
+ *          Copyright (C) 2013 Nu Tech Software Solutions, Inc.
  *          All rights reserved
  *          Reproduction without permission is prohibited
  *
@@ -45,6 +45,7 @@
  *		  1.4.0 08/14/13 Added SSL support --SAP
  *		  1.4.1 08/17/13 Add compiler switches cleanup tabification --SM
  *		  1.4.2 09/05/13 Added configuration support. --SAP
+ *		  1.4.3 10/24/13 SSL support improvements and some cleanup --SM
  *
  \******************************************************************************/
 #define _GNU_SOURCE
@@ -80,10 +81,10 @@
 #include <openssl/err.h>
 #endif
 
-#define SER2SOCK_VERSION "V1.4.1"
+#define SER2SOCK_VERSION "V1.4.3"
 #define TRUE 1
 #define FALSE 0
-typedef int BOOL;
+
 #define MAXCLIENTCONNECTIONS 10
 #define MAXCONNECTIONS MAXCLIENTCONNECTIONS+2
 #define MAX_FIFO_BUFFERS 30
@@ -93,7 +94,12 @@ typedef int BOOL;
 
 #define CONFIG_PATH "/etc/ser2sock/ser2sock.conf"
 
+#define DAEMON_NAME "ser2sock"
+#define PID_FILE "/var/run/ser2sock.pid"
+
 /* <Types and Constants> */
+
+typedef int BOOL;
 const char terminal_init_string[] = "\377\375\042";
 const char * fd_type_strings[] =
 { "NA", "LISTEN", "CLIENT", "SERIAL" };
@@ -119,8 +125,6 @@ speed_spec speeds[] =
 { "115200", B115200 },
 { NULL, 0 } };
 
-#define DAEMON_NAME "ser2sock"
-#define PID_FILE "/var/run/ser2sock.pid"
 
 /* </Types and Constants> */
 
@@ -144,6 +148,7 @@ typedef struct
 #ifdef SSL_SUPPORT
 	/* SSL descriptor */
 	BIO* ssl;
+	BOOL handshake_done;
 #endif
 	/* persistent settings */
 	struct termios oldtio;
@@ -201,14 +206,12 @@ static void writepid(void);
 
 #ifdef SSL_SUPPORT
 BOOL init_ssl();
-int ssl_accept();
 void shutdown_ssl();
 void shutdown_ssl_conn(BIO* sslbio);
 #endif
 /* </Prototypes> */
 
 /* <Globals> */
-// soon to be params or config values
 volatile sig_atomic_t got_hup = 0;
 char * serial_device_name = 0;
 int listen_port = 10000;
@@ -298,15 +301,16 @@ void vlog_message(char *msg, va_list arg)
 
 					message[x]=0;
 					if(x)
-					if (option_daemonize)
 					{
-						syslog(LOG_INFO, "%s", message);
+						if (option_daemonize)
+						{
+							syslog(LOG_INFO, "%s", message);
+						}
+						else
+						{
+							fprintf(stderr, "%s\n", message);
+						}
 					}
-					else
-					{
-						fprintf(stderr, "%s\n", message);
-					}
-
 					/* move the rest to the start and clean out any non printable chars */ 
 					z = 0;
 					for(y = x+1; y < last ; y++) {
@@ -394,6 +398,7 @@ int init_system()
 		my_fds[x].fd_type = NA;
 #ifdef SSL_SUPPORT
 		my_fds[x].ssl = 0;
+		my_fds[x].handshake_done = FALSE;
 #endif
 		fifo_init(&my_fds[x].send_buffer, MAX_FIFO_BUFFERS);
 	}
@@ -440,8 +445,6 @@ int init_listen_socket_fd()
 	int results;
 	struct linger solinger;
 #ifdef SSL_SUPPORT
-	SSL* ssl;
-
 	if (option_ssl)
 	{
 		if (!init_ssl())
@@ -758,9 +761,12 @@ int cleanup_fd(int n)
 #ifdef SSL_SUPPORT
 		if (my_fds[n].ssl != NULL)
 			shutdown_ssl_conn(my_fds[n].ssl);
+		my_fds[n].ssl = NULL;
+		my_fds[n].handshake_done = FALSE;
 #endif
 		/* close the fd */
 		close(my_fds[n].fd);
+		my_fds[n].fd = -1;
 
 		/* clear any data we have saved */
 		fifo_clear(&my_fds[n].send_buffer);
@@ -775,6 +781,9 @@ int cleanup_fd(int n)
 	return TRUE;
 }
 
+/*
+ Diff two time values
+ */
 long get_time_difference(struct timeval *startTime)
 {
 	struct timeval endTime;
@@ -804,7 +813,7 @@ void listen_loop()
 {
 	unsigned int clilen;
 	int newsockfd;
-	int added_id, tmp;
+	int added_id;
 	byte_t *tempbuffer;
 	byte_t buffer[1024];
 	int n, x, fd_count, received, written;
@@ -825,6 +834,9 @@ void listen_loop()
 	sched_setscheduler(0,SCHED_RR,&param);
 #endif
 
+#ifdef SSL_SUPPORT
+	BIO* newbio = 0;
+#endif
 
 	init_add_to_all_socket_fds_state(&aas_state);
 	tv_start.tv_sec = 0;
@@ -954,12 +966,31 @@ void listen_loop()
 						/* if this is a listening socket then we accept on it and get a new client socket */
 						if (my_fds[n].fd_type == LISTEN_SOCKET)
 						{
+							/* clear our state vars */
+							newsockfd = -1;
 #ifdef SSL_SUPPORT
+							newbio = NULL;
 							if (option_ssl)
 							{
-								newsockfd = ssl_accept();
-								if (newsockfd == -1)
-									continue;
+								if (BIO_do_accept(abio) <= 0) 
+								{
+									log_message("SSL BIO_do_accept failed: %s\n", 
+										    ERR_error_string(ERR_get_error(), NULL));
+								} else 
+								{
+									// try and grab our actual working BIO.
+									newbio = BIO_pop(abio);
+									
+									if (!newbio) 
+									{
+										log_message("SSL accept BIO_pop failed: %s\n", 
+										    ERR_error_string(ERR_get_error(), NULL));
+									} else 
+									{
+										/* get our fd from the BIO */
+										BIO_get_fd(newbio, &newsockfd);
+									}
+								}
 							}
 							else
 #endif
@@ -970,15 +1001,36 @@ void listen_loop()
 							{
 								if (serial_connected || option_keep_connection)
 								{
+									/* reset our added id to a bad state */
+									added_id = -1;
 #ifdef SSL_SUPPORT
-									if (!option_ssl)
+									if (option_ssl) 
+									{
+										// tell the SSL state machine to start to handshake
+										if (BIO_do_handshake(newbio) <= 0)
+										{
+											if (!BIO_should_retry(newbio))
+											{
+												log_message("SSL handshake failed with no retry: %s\n",
+													    ERR_error_string(ERR_get_error(), NULL));
+												shutdown_ssl_conn(newbio);
+												close(newsockfd);
+											} else
+											{
+												added_id = add_fd(newsockfd, CLIENT_SOCKET);;
+											}
+										}
+									} else
 #endif
 									{
 										added_id = add_fd(newsockfd, CLIENT_SOCKET);
 									}
 									if (added_id >= 0)
 									{
-
+#ifdef SSL_SUPPORT
+										if (option_ssl && newbio != NULL)
+											my_fds[added_id].ssl = newbio;
+#endif
 										log_message("socket connected\n");
 										/* adding anything to the fifo must be pre allocated */
 										if (option_send_terminal_init)
@@ -1014,6 +1066,10 @@ void listen_loop()
 									}
 									else
 									{
+#ifdef SSL_SUPPORT
+										if (newbio != NULL)
+											shutdown_ssl_conn(newbio);
+#endif
 										close(newsockfd);
 										log_message(
 												"socket refused because no more space\n");
@@ -1021,6 +1077,10 @@ void listen_loop()
 								}
 								else
 								{
+#ifdef SSL_SUPPORT
+									if (newbio != NULL)
+									      shutdown_ssl_conn(newbio);
+#endif
 									close(newsockfd);
 									log_message(
 											"socket refused because serial is not connected\n");
@@ -1135,29 +1195,70 @@ void listen_loop()
 					{
 						if (!fifo_empty(&my_fds[n].send_buffer))
 						{
-							tempbuffer = (char *) fifo_get(
-									&my_fds[n].send_buffer);
+							/* set our var to an invalid state */
+							tempbuffer = NULL;
 							if (my_fds[n].fd_type == CLIENT_SOCKET)
 							{
-								is_serviced = 1;
-								if (option_debug_level > 2)
-									log_message("SOCKET[%i]<", n);
 #ifdef SSL_SUPPORT
 								if (option_ssl)
 								{
-									written = BIO_write(my_fds[n].ssl, tempbuffer, strlen(tempbuffer));
-									if (written <= 0 && BIO_should_retry(my_fds[n].ssl))
-										continue;
+									/* dont try and send till we are ready */
+									if(my_fds[n].handshake_done)
+									{
+										/* load our buffer with data to send */
+										tempbuffer = (char *) fifo_get(
+												&my_fds[n].send_buffer);
+										written = BIO_write(my_fds[n].ssl, tempbuffer, strlen(tempbuffer));
+										if (written <= 0 && BIO_should_retry(my_fds[n].ssl))
+											continue;
+									} else
+									{
+										/* 
+										 * I think this is wrong should be < 0 but retry
+										 * test seems to compensate and it works. If
+										 * the socket went poof it may not though so
+										 * it needs testing. Same as above usage.
+										 * 
+										 * sm.
+										 * 
+										 * http://www.mail-archive.com/ssl-users@lists.cryptsoft.com/msg00538.html
+										 */
+										if (BIO_do_handshake(my_fds[n].ssl) <= 0)
+										{
+											if (!BIO_should_retry(my_fds[n].ssl))
+											{
+												log_message("SSL handshake failed with no retry: %s\n",
+													    ERR_error_string(ERR_get_error(), NULL));
+												cleanup_fd(n);
+											}
+										} else
+										{
+											my_fds[n].handshake_done = TRUE;
+										}
+									}
 								}
 								else
 #endif
 								{
+									/* load our buffer with data to send */
+									tempbuffer = (char *) fifo_get(
+											&my_fds[n].send_buffer);
 									send(my_fds[n].fd, tempbuffer, strlen(tempbuffer), 0);
+								}
+
+								if ( tempbuffer )
+								{
+									is_serviced = 1;
+									if (option_debug_level > 2)
+										log_message("SOCKET[%i]<", n);
 								}
 							}
 							else
 								if (my_fds[n].fd_type == SERIAL)
 								{
+									/* load our buffer with data to send */
+									tempbuffer = (char *) fifo_get(
+											&my_fds[n].send_buffer);
 									errno = 0;
 									is_serviced = 1;
 									if (option_debug_level > 2)
@@ -1176,7 +1277,7 @@ void listen_loop()
 									}
 								}
 
-							if (option_debug_level > 2)
+							if (option_debug_level > 2 && tempbuffer)
 							{
 								for (x = 0; x < strlen(tempbuffer); x++)
 								{
@@ -1184,7 +1285,9 @@ void listen_loop()
 								}
 								log_message("\n");
 							}
-							free(tempbuffer);
+							
+							if(tempbuffer)
+								free(tempbuffer);
 						}
 						else
 						{
@@ -1211,11 +1314,15 @@ void listen_loop()
 	log_message("done.\n");
 }
 
+/*
+ Initialize add_to_all_socket_fds_state_t
+ */
 void init_add_to_all_socket_fds_state(
 		struct add_to_all_socket_fds_state_t *state)
 {
 	state->line_ended = 0;
 }
+
 /*
  add_to_all_socket_fds
  adds a buffer to ever connected socket fd ie multiplexes
@@ -1785,6 +1892,9 @@ void* fifo_get(fifo *f)
 //</Fifo Buffer>
 
 #ifdef SSL_SUPPORT
+/*
+ initialize the ssl library
+ */
 BOOL init_ssl()
 {
 	SSL* ssl;
@@ -1857,46 +1967,9 @@ BOOL init_ssl()
 	return TRUE;
 }
 
-int ssl_accept()
-{
-	BIO* newbio = 0;
-	int newsockfd = -1;
-	int added_id = -1;
-
-	// Accept the connection
-	if (BIO_do_accept(abio) <= 0)
-	{
-		log_message("SSL accept-2 failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
-		return -1;
-	}
-
-	// Grab our actual working BIO.
-	newbio = BIO_pop(abio);
-	if (!newbio)
-	{
-		log_message("Could not pop SSL BIO.");
-		return -1;
-	}
-
-	// Save the descriptors for later use.
-	BIO_get_fd(newbio, &newsockfd);
-	added_id = add_fd(newsockfd, CLIENT_SOCKET);
-	my_fds[added_id].ssl = newbio;
-
-	// SSL handshake.
-	if (BIO_do_handshake(newbio) <= 0)
-	{
-		if (!BIO_should_retry(newbio))
-		{
-			log_message("SSL handshake failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
-			cleanup_fd(added_id);
-		}
-		return -1;
-	}
-
-	return added_id;
-}
-
+/*
+ cleanup the ssl library handles
+ */
 void shutdown_ssl()
 {
 	BIO_free_all(abio);
@@ -1905,6 +1978,9 @@ void shutdown_ssl()
 	EVP_cleanup();
 }
 
+/*
+ cleanup an ssl connection and its handles
+ */
 void shutdown_ssl_conn(BIO* sslbio)
 {
 	BIO *tmp=BIO_pop(sslbio);
