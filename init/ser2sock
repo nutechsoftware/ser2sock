@@ -17,7 +17,8 @@
 PORT=10000
 DEVICE=/dev/ttyAMA0
 BAUD=115200
-OPTIONS=
+
+CONF=/etc/ser2sock/ser2sock.conf
 
 ser2sock=/usr/local/bin/ser2sock
 prog=ser2sock
@@ -31,7 +32,11 @@ NORMAL=$(tput sgr0)
 start() {
     echo -n $"Starting $prog: "
 
-    $ser2sock -d -p $PORT -s $DEVICE -b 115200 $OPTIONS >/dev/null 2>&1
+    if [ ! -f $CONF ]; then
+        $ser2sock -d -c -p $PORT -s $DEVICE -b 115200 >/dev/null 2>&1
+    else
+        $ser2sock -d >/dev/null 2>&1
+    fi
     RETVAL=$?
 
     if [ $RETVAL = 0 ]; then
