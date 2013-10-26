@@ -704,16 +704,11 @@ void set_non_blocking(int fd)
  */
 int add_fd(int fd, int fd_type)
 {
-	int s = 0;
 	int x;
 	int results = -1;
 	struct linger solinger;
 
-	// The first three slots are reserved for serial and listen fds
-	if (fd_type == CLIENT_SOCKET)
-		s = 2;
-
-	for (x = s; x < MAXCONNECTIONS; x++)
+	for (x = 0; x < MAXCONNECTIONS; x++)
 	{
 		if (my_fds[x].inuse == FALSE)
 		{
@@ -806,13 +801,13 @@ long get_time_difference(struct timeval *startTime)
 /* 
  check for a hup signal and hup work if needed 
  */
-void hup_check() 
+BOOL hup_check() 
 {
 	int n;
 	
 	/* did we get a hup signal? */
 	if (!got_hup) 
-	  return;
+	  return FALSE;
 	
 	/* clear it */
 	got_hup = 0;
@@ -828,16 +823,14 @@ void hup_check()
 	read_config(CONFIG_PATH);
 	init_system();
 	init_listen_socket_fd();
+	return TRUE;
 }
 
 /*
- service the serial port
+ poll the serial port reconnect if needed
  */
 void poll_serial_port() 
 {
-#ifdef USE_TIOCMGET
-	int n;
-#endif
 	/* if our port is not connected check if we should try to reconnect */
 	if (!serial_connected)
 	{
@@ -862,6 +855,7 @@ void poll_serial_port()
 	}
 	
 #ifdef USE_TIOCMGET
+	int n,tmp;
 	/* periodic serial device checking */
 	if ((tv_last_serial_check.tv_sec == 0) || (get_time_difference(
 			&tv_last_serial_check) >= 100))
@@ -913,7 +907,7 @@ void build_fdsets(fd_set *read_fdset, fd_set *write_fdset, fd_set *except_fdset)
 BOOL poll_exception_fdset(fd_set *except_fdset) 
 {
 	int n;
-	BOOL is_serviced = FALSE;
+	BOOL did_work = FALSE;
 
 	for (n = 0; n < MAXCONNECTIONS; n++)
 	{
@@ -923,14 +917,14 @@ BOOL poll_exception_fdset(fd_set *except_fdset)
 			{
 				if (my_fds[n].fd_type == CLIENT_SOCKET)
 				{
-					is_serviced=TRUE;
+					did_work = TRUE;
 					log_message("closing socket on exception\n");
 					cleanup_fd(n);
 				}
 			}
 		}
 	}
-	return is_serviced;
+	return did_work;
 }
 
 /* 
@@ -938,10 +932,10 @@ BOOL poll_exception_fdset(fd_set *except_fdset)
  */
 BOOL poll_read_fdset(fd_set *read_fdset)
 {
-	int x, n, received, newsockfd, added_id;
+	int x, n, received, newsockfd, added_slot;
 	unsigned int clilen;
 	byte_t *tempbuffer;
-	BOOL is_serviced = FALSE;
+	BOOL did_work = FALSE;
 	byte_t buffer[1024];
 	
 #ifdef SSL_SUPPORT
@@ -959,7 +953,9 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 			/* check read fd */
 			if (FD_ISSET(my_fds[n].fd,read_fdset))
 			{
-				/* if this is a listening socket then we accept on it and get a new client socket */
+				/*  if this is a listening socket then we accept on it and 
+				 * get a new client socket 
+				 */
 				if (my_fds[n].fd_type == LISTEN_SOCKET)
 				{
 					/* clear our state vars */
@@ -998,7 +994,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 						if (serial_connected || option_keep_connection)
 						{
 							/* reset our added id to a bad state */
-							added_id = -2;
+							added_slot = -2;
 #ifdef SSL_SUPPORT
 							if (option_ssl) 
 							{
@@ -1013,19 +1009,19 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 										close(newsockfd);
 									} else
 									{
-										added_id = add_fd(newsockfd, CLIENT_SOCKET);;
+										added_slot = add_fd(newsockfd, CLIENT_SOCKET);;
 									}
 								}
 							} else
 #endif
 							{
-								added_id = add_fd(newsockfd, CLIENT_SOCKET);
+								added_slot = add_fd(newsockfd, CLIENT_SOCKET);
 							}
-							if (added_id >= 0)
+							if (added_slot >= 0)
 							{
 #ifdef SSL_SUPPORT
 								if (option_ssl && newbio != NULL)
-									my_fds[added_id].ssl = newbio;
+									my_fds[added_slot].ssl = newbio;
 #endif
 								log_message("socket connected\n");
 								/* adding anything to the fifo must be pre allocated */
@@ -1033,22 +1029,22 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 								{
 									tempbuffer = strdup("!");
 									fifo_add(
-											&my_fds[added_id].send_buffer,
+											&my_fds[added_slot].send_buffer,
 											tempbuffer);
 									tempbuffer = strdup(
 											terminal_init_string);
 									fifo_add(
-											&my_fds[added_id].send_buffer,
+											&my_fds[added_slot].send_buffer,
 											tempbuffer);
 									tempbuffer = strdup("\r\n");
 									fifo_add(
-											&my_fds[added_id].send_buffer,
+											&my_fds[added_slot].send_buffer,
 											tempbuffer);
 								}
 
 								tempbuffer = strdup(
 										"!SER2SOCK Connected\r\n");
-								fifo_add(&my_fds[added_id].send_buffer,
+								fifo_add(&my_fds[added_slot].send_buffer,
 										tempbuffer);
 								if (serial_connected)
 									tempbuffer = strdup(
@@ -1056,9 +1052,9 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 								else
 									tempbuffer = strdup(
 											SERIAL_DISCONNECTED_MSG);
-								fifo_add(&my_fds[added_id].send_buffer,
+								fifo_add(&my_fds[added_slot].send_buffer,
 										tempbuffer);
-								is_serviced = TRUE;
+								did_work = TRUE;
 							}
 							else
 							{
@@ -1067,7 +1063,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 									shutdown_ssl_conn(newbio);
 #endif
 								close(newsockfd);
-								if(added_id == -1)
+								if(added_slot == -1)
 								log_message("socket refused because no more space\n");
 							}
 						}
@@ -1093,7 +1089,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 						{
 							if (received > 0)
 							{
-								is_serviced = TRUE;
+								did_work = TRUE;
 								buffer[received] = 0;
 								add_to_all_socket_fds(buffer);
 								if (option_debug_level > 1)
@@ -1161,7 +1157,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 							}
 							else
 							{
-								is_serviced = TRUE;
+								did_work = TRUE;
 								buffer[received] = 0;
 								add_to_serial_fd(buffer);
 								if (option_debug_level > 2)
@@ -1181,7 +1177,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 		}
 	}  
 	
-	return is_serviced;
+	return did_work;
 }
 
 /* 
@@ -1191,17 +1187,20 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 {
 	int x, n, written;
 	byte_t *tempbuffer;
-	BOOL is_serviced = FALSE;
+	BOOL did_work = FALSE;
 
 	/* check every socket to find the one that needs write */
 	for (n = 0; n < MAXCONNECTIONS; n++)
 	{
 		if (my_fds[n].inuse == TRUE && FD_ISSET(my_fds[n].fd,write_fdset))
 		{
+			/* see if we have data to write */
 			if (!fifo_empty(&my_fds[n].send_buffer))
 			{
 				/* set our var to an invalid state */
 				tempbuffer = NULL;
+
+				/* handle writing to CLIENT_SOCKET */
 				if (my_fds[n].fd_type == CLIENT_SOCKET)
 				{
 #ifdef SSL_SUPPORT
@@ -1218,16 +1217,6 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 								continue;
 						} else
 						{
-							/* 
-							  * I think this is wrong should be < 0 but retry
-							  * test seems to compensate and it works. If
-							  * the socket went poof it may not though so
-							  * it needs testing. Same as above usage.
-							  * 
-							  * sm.
-							  * 
-							  * http://www.mail-archive.com/ssl-users@lists.cryptsoft.com/msg00538.html
-							  */
 							if (BIO_do_handshake(my_fds[n].ssl) <= 0)
 							{
 								if (!BIO_should_retry(my_fds[n].ssl))
@@ -1244,28 +1233,30 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 					}
 					else
 #endif
+					/* load our buffer with data to send */
 					{
-						/* load our buffer with data to send */
 						tempbuffer = (char *) fifo_get(
 								&my_fds[n].send_buffer);
 						send(my_fds[n].fd, tempbuffer, strlen(tempbuffer), 0);
 					}
 
+					/* did we do any work? */
 					if ( tempbuffer )
 					{
-						is_serviced = 1;
+						did_work = TRUE;
 						if (option_debug_level > 2)
 							log_message("SOCKET[%i]<", n);
 					}
 				}
 
+				/* handle writes to SERIAL */
 				if (my_fds[n].fd_type == SERIAL)
 				{
 					/* load our buffer with data to send */
 					tempbuffer = (char *) fifo_get(
 							&my_fds[n].send_buffer);
 					errno = 0;
-					is_serviced = 1;
+					did_work = TRUE;
 					if (option_debug_level > 2)
 						log_message("SERIAL[%i]<", n);
 					if (write(my_fds[n].fd, tempbuffer, strlen(
@@ -1281,6 +1272,7 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 					}
 				}
 
+				/* logging if needed */
 				if (option_debug_level > 2 && tempbuffer)
 				{
 					for (x = 0; x < strlen(tempbuffer); x++)
@@ -1289,12 +1281,16 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 					}
 					log_message("\n");
 				}
-				
+
+				/* free up memory */	
 				if(tempbuffer)
 					free(tempbuffer);
 			}
 			else
 			{
+				/* if serial disconnected and not option_keep_connected
+				   then disconnect the client 
+				 */
 				if (!serial_connected && !option_keep_connection)
 				{
 					if (my_fds[n].fd_type == CLIENT_SOCKET)
@@ -1306,7 +1302,7 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 		}
 	}
 	
-	return is_serviced;
+	return did_work;
 }
 
 /*
@@ -1315,7 +1311,7 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 void listen_loop()
 {
 	int n;
-	BOOL is_serviced;
+	BOOL did_work=FALSE,reset_state=TRUE;
 	fd_set read_fdset, write_fdset, except_fdset;
 	struct timeval wait;
 	
@@ -1329,34 +1325,38 @@ void listen_loop()
 	sched_setscheduler(0,SCHED_RR,&param);
 #endif
 
-
-	line_ended=0;
-	
-	tv_serial_start.tv_sec = 0;
-	tv_serial_start.tv_usec = 0;
-	tv_last_serial_check.tv_sec = 0;
-	tv_last_serial_check.tv_usec = 0;
-
 	log_message("Start wait loop\n");
+
+	/* continue polling until interrupted */
 	while (!kbhit())
 	{
+		/* reset our loop state var(s) for this iteration */
+		did_work = FALSE;
 
 		/* check for hup signal */
-		hup_check();
+		if(hup_check())
+			reset_state = TRUE;
 
-		/* service our serial port if needed */
+		/* reset state if asked */
+		if (reset_state) {
+			line_ended=0;
+			tv_serial_start.tv_sec = 0;
+			tv_serial_start.tv_usec = 0;
+			tv_last_serial_check.tv_sec = 0;
+			tv_last_serial_check.tv_usec = 0;
+			reset_state=FALSE;
+		}
+
+		/* poll our serial port reconnect if needed */
 		poll_serial_port();
 
 		/* build our fd sets */
 		build_fdsets(&read_fdset, &write_fdset, &except_fdset);
 
-		/* reset our loop state vars for this iteration */
-		is_serviced = FALSE;
-
 		/* lets not block our select and bail after 20us */
 		wait.tv_sec = 0; wait.tv_usec = 20;
 
-		/* see if any of the fd's need service */
+		/* see if any of the fd's need attention */
 		n = select(FD_SETSIZE, &read_fdset, &write_fdset, &except_fdset, &wait);
 		if (n == -1)
 		{
@@ -1368,13 +1368,15 @@ void listen_loop()
 		poll_exception_fdset(&except_fdset);
 
 		/* poll our read fdset */
-		is_serviced = poll_read_fdset(&read_fdset);
+		did_work = poll_read_fdset(&read_fdset);
 
 		/* poll our write fdset */
-		is_serviced = poll_write_fdset(&write_fdset);
+		did_work = poll_write_fdset(&write_fdset);
 
-
-		if (!is_serviced)
+		/* if we did not do anything then sleep a little predict
+		   next go round will be idle too
+		*/
+		if (!did_work)
 			msleep(20);
 	}
 
