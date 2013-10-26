@@ -46,6 +46,7 @@
  *		  1.4.1 08/17/13 Add compiler switches cleanup tabification --SM
  *		  1.4.2 09/05/13 Added configuration support. --SAP
  *		  1.4.3 10/24/13 SSL support improvements and some cleanup --SM
+ * 		  1.4.4 10/25/13 refactor main state machine -SM
  *
  \******************************************************************************/
 #define _GNU_SOURCE
@@ -81,7 +82,7 @@
 #include <openssl/err.h>
 #endif
 
-#define SER2SOCK_VERSION "V1.4.3"
+#define SER2SOCK_VERSION "V1.4.4"
 #define TRUE 1
 #define FALSE 0
 
@@ -157,10 +158,6 @@ typedef struct
 	fifo send_buffer;
 } FDs;
 
-struct add_to_all_socket_fds_state_t
-{
-	int line_ended;
-};
 
 #if defined __FreeBSD__
 typedef unsigned char byte_t;
@@ -174,10 +171,7 @@ typedef char byte_t;
 int init_system();
 int init_listen_socket_fd();
 int init_serial_fd(char *path);
-void init_add_to_all_socket_fds_state(
-		struct add_to_all_socket_fds_state_t *state);
-void add_to_all_socket_fds(struct add_to_all_socket_fds_state_t *state,
-		char * message);
+void add_to_all_socket_fds(char * message);
 void add_to_serial_fd(char * message);
 int cleanup_fd(int n);
 void set_non_blocking(int fd);
@@ -231,6 +225,9 @@ BOOL option_send_terminal_init = FALSE;
 int option_debug_level = 0;
 BOOL option_keep_connection = FALSE;
 int option_open_serial_delay = 5000;
+int line_ended = 0;
+int serial_connected = 0;
+struct timeval tv_serial_start, tv_last_serial_check;
 
 #ifdef SSL_SUPPORT
 BOOL option_ssl = FALSE;
@@ -494,8 +491,7 @@ int init_listen_socket_fd()
 		solinger.l_linger = 0;
 		setsockopt(listen_sock_fd, SOL_SOCKET, SO_LINGER, &solinger, sizeof(solinger));
 
-		if (bind(listen_sock_fd, (struct sockaddr *) &serv_addr, sizeof(serv_addr))
-				< 0)
+		if (bind(listen_sock_fd, (struct sockaddr *) &serv_addr, sizeof(serv_addr))< 0)
 		{
 			log_message("ERROR binding to server port");
 			return FALSE;
@@ -692,7 +688,7 @@ int get_baud(char * szbaud)
 }
 
 /*
- Makes a fd non blocking after opening
+ Makes a fd non blocking
  */
 void set_non_blocking(int fd)
 {
@@ -704,7 +700,7 @@ void set_non_blocking(int fd)
 }
 
 /*
- Add a fd to our array so we can process it in our loop
+ Add a fd to our array so we can poll it in our state machien loop
  */
 int add_fd(int fd, int fd_type)
 {
@@ -713,9 +709,10 @@ int add_fd(int fd, int fd_type)
 	int results = -1;
 	struct linger solinger;
 
-	// Reserve two first sockets for serial & listen
+	// The first three slots are reserved for serial and listen fds
 	if (fd_type == CLIENT_SOCKET)
 		s = 2;
+
 	for (x = s; x < MAXCONNECTIONS; x++)
 	{
 		if (my_fds[x].inuse == FALSE)
@@ -798,32 +795,530 @@ long get_time_difference(struct timeval *startTime)
 }
 
 #define clear_serial(n) \
-		tv_start.tv_sec = 0; \
-		tv_start.tv_usec = 0; \
+		tv_serial_start.tv_sec = 0; \
+		tv_serial_start.tv_usec = 0; \
 		serial_connected = 0; \
 		cleanup_fd(n); \
-		add_to_all_socket_fds(&aas_state, "\r\n"); \
-		add_to_all_socket_fds(&aas_state, SERIAL_DISCONNECTED_MSG); \
+		add_to_all_socket_fds("\r\n"); \
+		add_to_all_socket_fds(SERIAL_DISCONNECTED_MSG); \
 		msleep(100); \
 
+/* 
+ check for a hup signal and hup work if needed 
+ */
+void hup_check() 
+{
+	int n;
+	
+	/* did we get a hup signal? */
+	if (!got_hup) 
+	  return;
+	
+	/* clear it */
+	got_hup = 0;
+
+	/* do hup stuff */
+	for (n = 0; n < MAXCONNECTIONS; n++)
+	{
+		if (my_fds[n].inuse == TRUE && my_fds[n].fd_type == SERIAL)
+			clear_serial(n);
+	}
+
+	free_system();
+	read_config(CONFIG_PATH);
+	init_system();
+	init_listen_socket_fd();
+}
+
 /*
- this loop processes all of our fds'
+ service the serial port
+ */
+void poll_serial_port() 
+{
+#ifdef USE_TIOCMGET
+	int n;
+#endif
+	/* if our port is not connected check if we should try to reconnect */
+	if (!serial_connected)
+	{
+		if ((tv_serial_start.tv_sec == 0) || (get_time_difference(&tv_serial_start)
+				>= option_open_serial_delay))
+		{
+			gettimeofday(&tv_serial_start, NULL);
+			if (init_serial_fd(serial_device_name) > 0)
+			{
+				serial_connected = 1;
+				tv_last_serial_check.tv_sec = 0;
+				tv_last_serial_check.tv_usec = 0;
+				line_ended=0;
+				add_to_all_socket_fds(SERIAL_CONNECTED_MSG);
+			}
+			else
+				msleep(10);
+		}
+		else
+			msleep(10);
+		return;
+	}
+	
+#ifdef USE_TIOCMGET
+	/* periodic serial device checking */
+	if ((tv_last_serial_check.tv_sec == 0) || (get_time_difference(
+			&tv_last_serial_check) >= 100))
+	{
+		errno = 0;
+		gettimeofday(&tv_last_serial_check, NULL);
+		for (n = 0; n < MAXCONNECTIONS; n++)
+		{
+			if (my_fds[n].fd_type == SERIAL && my_fds[n].inuse == TRUE)
+			{
+				if (ioctl(my_fds[n].fd, TIOCMGET, &tmp) < 0)
+				{
+					log_message("Serial disconnected on check. errno: %i\n",errno);
+					clear_serial(n);
+				}
+				/* currently only 1 serial port so we are done */
+				break;
+			}
+		}
+	}
+#endif
+}
+
+/* 
+ add all of our fd to our r,w and e fd sets 
+*/
+void build_fdsets(fd_set *read_fdset, fd_set *write_fdset, fd_set *except_fdset)
+{
+	int n;
+  
+	/* add all sockets to our fdset */
+	FD_ZERO(read_fdset);
+	FD_ZERO(write_fdset);
+	FD_ZERO(except_fdset);
+	for (n = 0; n < MAXCONNECTIONS; n++)
+	{
+		if (my_fds[n].inuse == TRUE)
+		{
+			FD_SET(my_fds[n].fd,read_fdset);
+			FD_SET(my_fds[n].fd,write_fdset);
+			FD_SET(my_fds[n].fd,except_fdset);
+		}
+	}
+}
+
+/* 
+ poll any exception fd's return TRUE if we did some work
+ */
+BOOL poll_exception_fdset(fd_set *except_fdset) 
+{
+	int n;
+	BOOL is_serviced = FALSE;
+
+	for (n = 0; n < MAXCONNECTIONS; n++)
+	{
+		if (my_fds[n].inuse == TRUE)
+		{
+			if (FD_ISSET(my_fds[n].fd,except_fdset))
+			{
+				if (my_fds[n].fd_type == CLIENT_SOCKET)
+				{
+					is_serviced=TRUE;
+					log_message("closing socket on exception\n");
+					cleanup_fd(n);
+				}
+			}
+		}
+	}
+	return is_serviced;
+}
+
+/* 
+  poll any read fd's return TRUE if we did do some work
+ */
+BOOL poll_read_fdset(fd_set *read_fdset)
+{
+	int x, n, received, newsockfd, added_id;
+	unsigned int clilen;
+	byte_t *tempbuffer;
+	BOOL is_serviced = FALSE;
+	byte_t buffer[1024];
+	
+#ifdef SSL_SUPPORT
+	BIO* newbio = 0;
+#endif
+
+	clilen = sizeof(struct sockaddr_in);
+
+	/* check every socket to find the one that needs read */
+	for (n = 0; n < MAXCONNECTIONS; n++)
+	{
+		if (my_fds[n].inuse == TRUE)
+		{
+
+			/* check read fd */
+			if (FD_ISSET(my_fds[n].fd,read_fdset))
+			{
+				/* if this is a listening socket then we accept on it and get a new client socket */
+				if (my_fds[n].fd_type == LISTEN_SOCKET)
+				{
+					/* clear our state vars */
+					newsockfd = -1;
+#ifdef SSL_SUPPORT
+					newbio = NULL;
+					if (option_ssl)
+					{
+						if (BIO_do_accept(abio) <= 0) 
+						{
+							log_message("SSL BIO_do_accept failed: %s\n", 
+								    ERR_error_string(ERR_get_error(), NULL));
+						} else 
+						{
+							// try and grab our actual working BIO.
+							newbio = BIO_pop(abio);
+							
+							if (!newbio) 
+							{
+								log_message("SSL accept BIO_pop failed: %s\n", 
+								    ERR_error_string(ERR_get_error(), NULL));
+							} else 
+							{
+								/* get our fd from the BIO */
+								BIO_get_fd(newbio, &newsockfd);
+							}
+						}
+					}
+					else
+#endif
+					{
+						newsockfd = accept(listen_sock_fd, (struct sockaddr *) &peer_addr, &clilen);
+					}
+					if (newsockfd != -1)
+					{
+						if (serial_connected || option_keep_connection)
+						{
+							/* reset our added id to a bad state */
+							added_id = -2;
+#ifdef SSL_SUPPORT
+							if (option_ssl) 
+							{
+								// tell the SSL state machine to start to handshake
+								if (BIO_do_handshake(newbio) <= 0)
+								{
+									if (!BIO_should_retry(newbio))
+									{
+										log_message("SSL handshake failed with no retry: %s\n",
+											    ERR_error_string(ERR_get_error(), NULL));
+										shutdown_ssl_conn(newbio);
+										close(newsockfd);
+									} else
+									{
+										added_id = add_fd(newsockfd, CLIENT_SOCKET);;
+									}
+								}
+							} else
+#endif
+							{
+								added_id = add_fd(newsockfd, CLIENT_SOCKET);
+							}
+							if (added_id >= 0)
+							{
+#ifdef SSL_SUPPORT
+								if (option_ssl && newbio != NULL)
+									my_fds[added_id].ssl = newbio;
+#endif
+								log_message("socket connected\n");
+								/* adding anything to the fifo must be pre allocated */
+								if (option_send_terminal_init)
+								{
+									tempbuffer = strdup("!");
+									fifo_add(
+											&my_fds[added_id].send_buffer,
+											tempbuffer);
+									tempbuffer = strdup(
+											terminal_init_string);
+									fifo_add(
+											&my_fds[added_id].send_buffer,
+											tempbuffer);
+									tempbuffer = strdup("\r\n");
+									fifo_add(
+											&my_fds[added_id].send_buffer,
+											tempbuffer);
+								}
+
+								tempbuffer = strdup(
+										"!SER2SOCK Connected\r\n");
+								fifo_add(&my_fds[added_id].send_buffer,
+										tempbuffer);
+								if (serial_connected)
+									tempbuffer = strdup(
+											SERIAL_CONNECTED_MSG);
+								else
+									tempbuffer = strdup(
+											SERIAL_DISCONNECTED_MSG);
+								fifo_add(&my_fds[added_id].send_buffer,
+										tempbuffer);
+								is_serviced = TRUE;
+							}
+							else
+							{
+#ifdef SSL_SUPPORT
+								if (newbio != NULL)
+									shutdown_ssl_conn(newbio);
+#endif
+								close(newsockfd);
+								if(added_id == -1)
+								log_message("socket refused because no more space\n");
+							}
+						}
+						else
+						{
+#ifdef SSL_SUPPORT
+							if (newbio != NULL)
+							      shutdown_ssl_conn(newbio);
+#endif
+							close(newsockfd);
+							log_message("socket refused because serial is not connected\n");
+						}
+					}
+
+				}
+				else
+				{
+					if (my_fds[n].fd_type == SERIAL)
+					{
+						errno = 0;
+						while ((received = read(my_fds[n].fd, buffer,
+								sizeof(buffer))) > 0)
+						{
+							if (received > 0)
+							{
+								is_serviced = TRUE;
+								buffer[received] = 0;
+								add_to_all_socket_fds(buffer);
+								if (option_debug_level > 1)
+								{
+									if (option_debug_level > 2)
+									{
+										log_message("SERIAL>'");
+										for (x = 0; x < received; x++)
+										{
+											log_message("[%02x]",
+													buffer[x]);
+										}
+										log_message("\n");
+									}
+									else
+									{
+										log_message("%s", buffer);
+									}
+								}
+							}
+						}
+
+						if (received < 0)
+						{
+							if (errno != EAGAIN)
+							{
+								log_message(
+										"Serial disconnected on read. errno: %i\n",
+										errno);
+								clear_serial(n);
+							}
+						}
+					}
+					else
+					{
+						errno = 0;
+#ifdef SSL_SUPPORT
+						if (option_ssl)
+						{
+							received = BIO_read(my_fds[n].ssl, buffer, sizeof(buffer));
+							if (received <= 0 && BIO_should_retry(my_fds[n].ssl))
+									continue;
+						}
+						else
+#endif
+						{
+							received = recv(my_fds[n].fd, buffer, sizeof(buffer), 0);
+						}
+						if (received == 0)
+						{
+							log_message("closing socket errno: %i\n",
+									errno);
+							cleanup_fd(n);
+						}
+						else
+						{
+							if (received < 0)
+							{
+								if (errno == EAGAIN || errno == EINTR)
+									continue;
+								log_message(
+										"closing socket errno: %i\n",
+										errno);
+								cleanup_fd(n);
+							}
+							else
+							{
+								is_serviced = TRUE;
+								buffer[received] = 0;
+								add_to_serial_fd(buffer);
+								if (option_debug_level > 2)
+								{
+									log_message("SOCKET[%i]>", n);
+									for (x = 0; x < strlen(buffer); x++)
+									{
+										log_message("[%02x]", buffer[x]);
+									}
+									log_message("\n");
+								}
+							}
+						}
+					}
+				}
+			} /* end FD_ISSET() */
+		}
+	}  
+	
+	return is_serviced;
+}
+
+/* 
+  poll all write fd's return TRUE if we did do some work
+ */
+BOOL poll_write_fdset(fd_set *write_fdset)
+{
+	int x, n, written;
+	byte_t *tempbuffer;
+	BOOL is_serviced = FALSE;
+
+	/* check every socket to find the one that needs write */
+	for (n = 0; n < MAXCONNECTIONS; n++)
+	{
+		if (my_fds[n].inuse == TRUE && FD_ISSET(my_fds[n].fd,write_fdset))
+		{
+			if (!fifo_empty(&my_fds[n].send_buffer))
+			{
+				/* set our var to an invalid state */
+				tempbuffer = NULL;
+				if (my_fds[n].fd_type == CLIENT_SOCKET)
+				{
+#ifdef SSL_SUPPORT
+					if (option_ssl)
+					{
+						/* dont try and send till we are ready */
+						if(my_fds[n].handshake_done)
+						{
+							/* load our buffer with data to send */
+							tempbuffer = (char *) fifo_get(
+									&my_fds[n].send_buffer);
+							written = BIO_write(my_fds[n].ssl, tempbuffer, strlen(tempbuffer));
+							if (written <= 0 && BIO_should_retry(my_fds[n].ssl))
+								continue;
+						} else
+						{
+							/* 
+							  * I think this is wrong should be < 0 but retry
+							  * test seems to compensate and it works. If
+							  * the socket went poof it may not though so
+							  * it needs testing. Same as above usage.
+							  * 
+							  * sm.
+							  * 
+							  * http://www.mail-archive.com/ssl-users@lists.cryptsoft.com/msg00538.html
+							  */
+							if (BIO_do_handshake(my_fds[n].ssl) <= 0)
+							{
+								if (!BIO_should_retry(my_fds[n].ssl))
+								{
+									log_message("SSL handshake failed with no retry: %s\n",
+										    ERR_error_string(ERR_get_error(), NULL));
+									cleanup_fd(n);
+								}
+							} else
+							{
+								my_fds[n].handshake_done = TRUE;
+							}
+						}
+					}
+					else
+#endif
+					{
+						/* load our buffer with data to send */
+						tempbuffer = (char *) fifo_get(
+								&my_fds[n].send_buffer);
+						send(my_fds[n].fd, tempbuffer, strlen(tempbuffer), 0);
+					}
+
+					if ( tempbuffer )
+					{
+						is_serviced = 1;
+						if (option_debug_level > 2)
+							log_message("SOCKET[%i]<", n);
+					}
+				}
+
+				if (my_fds[n].fd_type == SERIAL)
+				{
+					/* load our buffer with data to send */
+					tempbuffer = (char *) fifo_get(
+							&my_fds[n].send_buffer);
+					errno = 0;
+					is_serviced = 1;
+					if (option_debug_level > 2)
+						log_message("SERIAL[%i]<", n);
+					if (write(my_fds[n].fd, tempbuffer, strlen(
+							tempbuffer)) < 0)
+					{
+						if (errno != EAGAIN)
+						{
+							log_message(
+									"Serial disconnected on write. errno: %i\n",
+									errno);
+							clear_serial(n);
+						}
+					}
+				}
+
+				if (option_debug_level > 2 && tempbuffer)
+				{
+					for (x = 0; x < strlen(tempbuffer); x++)
+					{
+						log_message("[%02x]", tempbuffer[x]);
+					}
+					log_message("\n");
+				}
+				
+				if(tempbuffer)
+					free(tempbuffer);
+			}
+			else
+			{
+				if (!serial_connected && !option_keep_connection)
+				{
+					if (my_fds[n].fd_type == CLIENT_SOCKET)
+					{
+						cleanup_fd(n);
+					}
+				}
+			}
+		}
+	}
+	
+	return is_serviced;
+}
+
+/*
+ this loop polls all of our fd's
  */
 void listen_loop()
 {
-	unsigned int clilen;
-	int newsockfd;
-	int added_id;
-	byte_t *tempbuffer;
-	byte_t buffer[1024];
-	int n, x, fd_count, received, written;
-	char is_serviced;
+	int n;
+	BOOL is_serviced;
 	fd_set read_fdset, write_fdset, except_fdset;
-	clilen = sizeof(struct sockaddr_in);
 	struct timeval wait;
-	int serial_connected = 0;
-	struct timeval tv_start, tv_last_serial_check;
-	struct add_to_all_socket_fds_state_t aas_state;
+	
 #ifdef _POSIX_SOURCE
 	// Set high thread priority
 	struct sched_param param;
@@ -834,475 +1329,50 @@ void listen_loop()
 	sched_setscheduler(0,SCHED_RR,&param);
 #endif
 
-#ifdef SSL_SUPPORT
-	BIO* newbio = 0;
-#endif
 
-	init_add_to_all_socket_fds_state(&aas_state);
-	tv_start.tv_sec = 0;
-	tv_start.tv_usec = 0;
+	line_ended=0;
+	
+	tv_serial_start.tv_sec = 0;
+	tv_serial_start.tv_usec = 0;
 	tv_last_serial_check.tv_sec = 0;
 	tv_last_serial_check.tv_usec = 0;
 
 	log_message("Start wait loop\n");
 	while (!kbhit())
 	{
-		if (got_hup)
-		{
-			got_hup = 0;
 
-			for (n = 0; n < MAXCONNECTIONS; n++)
-			{
-				if (my_fds[n].inuse == TRUE && my_fds[n].fd_type == SERIAL)
-					clear_serial(n);
-			}
+		/* check for hup signal */
+		hup_check();
 
-			free_system();
-			read_config(CONFIG_PATH);
-			init_system();
-			init_listen_socket_fd();
-		}
+		/* service our serial port if needed */
+		poll_serial_port();
 
-		if (!serial_connected)
-		{
-			if ((tv_start.tv_sec == 0) || (get_time_difference(&tv_start)
-					>= option_open_serial_delay))
-			{
-				gettimeofday(&tv_start, NULL);
-				if (init_serial_fd(serial_device_name) > 0)
-				{
-					serial_connected = 1;
-					tv_last_serial_check.tv_sec = 0;
-					tv_last_serial_check.tv_usec = 0;
-					init_add_to_all_socket_fds_state(&aas_state);
-					add_to_all_socket_fds(&aas_state, SERIAL_CONNECTED_MSG);
-				}
-				else
-					msleep(10);
-			}
-			else
-				msleep(10);
+		/* build our fd sets */
+		build_fdsets(&read_fdset, &write_fdset, &except_fdset);
 
-		} else
-		{
-			if ((tv_last_serial_check.tv_sec == 0) || (get_time_difference(
-					&tv_last_serial_check) >= 100))
-			{
-				errno = 0;
-				gettimeofday(&tv_last_serial_check, NULL);
-				for (n = 0; n < MAXCONNECTIONS; n++)
-				{
-					if (my_fds[n].inuse == TRUE)
-					{
-						if (my_fds[n].fd_type == SERIAL)
-						{
-#ifdef USE_TIOCMGET
-							if (ioctl(my_fds[n].fd, TIOCMGET, &tmp) < 0)
-							{
-								log_message(
-										"Serial disconnected on check. errno: %i\n",
-										errno);
-								clear_serial(n);
-							}
-							break;
-#endif
-						}
-					}
-				}
-			}
-		}
-
-		fd_count = 0;
-		/* add all sockets to our fdset */
-		FD_ZERO(&read_fdset);
-		FD_ZERO(&write_fdset);
-		FD_ZERO(&except_fdset);
-		for (n = 0; n < MAXCONNECTIONS; n++)
-		{
-			if (my_fds[n].inuse == TRUE)
-			{
-				FD_SET(my_fds[n].fd,&read_fdset);
-				FD_SET(my_fds[n].fd,&write_fdset);
-				FD_SET(my_fds[n].fd,&except_fdset);
-				fd_count++;
-			}
-		}
-		is_serviced = 0;
+		/* reset our loop state vars for this iteration */
+		is_serviced = FALSE;
 
 		/* lets not block our select and bail after 20us */
-		wait.tv_sec = 0;
-		wait.tv_usec = 20;
+		wait.tv_sec = 0; wait.tv_usec = 20;
 
-		/* see if any sockets need service */
+		/* see if any of the fd's need service */
 		n = select(FD_SETSIZE, &read_fdset, &write_fdset, &except_fdset, &wait);
 		if (n == -1)
 		{
-			log_message("socket error\n");
+			log_message("select error %i\n",errno);
+			continue;
 		}
-		else
-		{
-			for (n = 0; n < MAXCONNECTIONS; n++)
-			{
-				if (my_fds[n].inuse == TRUE)
-				{
-					if (FD_ISSET(my_fds[n].fd,&except_fdset))
-						if (my_fds[n].fd_type == CLIENT_SOCKET)
-						{
-							log_message("closing socket on exception\n");
-							cleanup_fd(n);
-						}
-				}
-			}
 
-			/* check every socket to find the one that needs read */
-			for (n = 0; n < MAXCONNECTIONS; n++)
-			{
-				if (my_fds[n].inuse == TRUE)
-				{
+		/* poll our exception fdset */
+		poll_exception_fdset(&except_fdset);
 
-					/* check read fd */
-					if (FD_ISSET(my_fds[n].fd,&read_fdset))
-					{
-						/* if this is a listening socket then we accept on it and get a new client socket */
-						if (my_fds[n].fd_type == LISTEN_SOCKET)
-						{
-							/* clear our state vars */
-							newsockfd = -1;
-#ifdef SSL_SUPPORT
-							newbio = NULL;
-							if (option_ssl)
-							{
-								if (BIO_do_accept(abio) <= 0) 
-								{
-									log_message("SSL BIO_do_accept failed: %s\n", 
-										    ERR_error_string(ERR_get_error(), NULL));
-								} else 
-								{
-									// try and grab our actual working BIO.
-									newbio = BIO_pop(abio);
-									
-									if (!newbio) 
-									{
-										log_message("SSL accept BIO_pop failed: %s\n", 
-										    ERR_error_string(ERR_get_error(), NULL));
-									} else 
-									{
-										/* get our fd from the BIO */
-										BIO_get_fd(newbio, &newsockfd);
-									}
-								}
-							}
-							else
-#endif
-							{
-								newsockfd = accept(listen_sock_fd, (struct sockaddr *) &peer_addr, &clilen);
-							}
-							if (newsockfd != -1)
-							{
-								if (serial_connected || option_keep_connection)
-								{
-									/* reset our added id to a bad state */
-									added_id = -1;
-#ifdef SSL_SUPPORT
-									if (option_ssl) 
-									{
-										// tell the SSL state machine to start to handshake
-										if (BIO_do_handshake(newbio) <= 0)
-										{
-											if (!BIO_should_retry(newbio))
-											{
-												log_message("SSL handshake failed with no retry: %s\n",
-													    ERR_error_string(ERR_get_error(), NULL));
-												shutdown_ssl_conn(newbio);
-												close(newsockfd);
-											} else
-											{
-												added_id = add_fd(newsockfd, CLIENT_SOCKET);;
-											}
-										}
-									} else
-#endif
-									{
-										added_id = add_fd(newsockfd, CLIENT_SOCKET);
-									}
-									if (added_id >= 0)
-									{
-#ifdef SSL_SUPPORT
-										if (option_ssl && newbio != NULL)
-											my_fds[added_id].ssl = newbio;
-#endif
-										log_message("socket connected\n");
-										/* adding anything to the fifo must be pre allocated */
-										if (option_send_terminal_init)
-										{
-											tempbuffer = strdup("!");
-											fifo_add(
-													&my_fds[added_id].send_buffer,
-													tempbuffer);
-											tempbuffer = strdup(
-													terminal_init_string);
-											fifo_add(
-													&my_fds[added_id].send_buffer,
-													tempbuffer);
-											tempbuffer = strdup("\r\n");
-											fifo_add(
-													&my_fds[added_id].send_buffer,
-													tempbuffer);
-										}
+		/* poll our read fdset */
+		is_serviced = poll_read_fdset(&read_fdset);
 
-										tempbuffer = strdup(
-												"!SER2SOCK Connected\r\n");
-										fifo_add(&my_fds[added_id].send_buffer,
-												tempbuffer);
-										if (serial_connected)
-											tempbuffer = strdup(
-													SERIAL_CONNECTED_MSG);
-										else
-											tempbuffer = strdup(
-													SERIAL_DISCONNECTED_MSG);
-										fifo_add(&my_fds[added_id].send_buffer,
-												tempbuffer);
-										is_serviced = 1;
-									}
-									else
-									{
-#ifdef SSL_SUPPORT
-										if (newbio != NULL)
-											shutdown_ssl_conn(newbio);
-#endif
-										close(newsockfd);
-										log_message(
-												"socket refused because no more space\n");
-									}
-								}
-								else
-								{
-#ifdef SSL_SUPPORT
-									if (newbio != NULL)
-									      shutdown_ssl_conn(newbio);
-#endif
-									close(newsockfd);
-									log_message(
-											"socket refused because serial is not connected\n");
-								}
-							}
+		/* poll our write fdset */
+		is_serviced = poll_write_fdset(&write_fdset);
 
-						}
-						else
-						{
-							if (my_fds[n].fd_type == SERIAL)
-							{
-								errno = 0;
-								while ((received = read(my_fds[n].fd, buffer,
-										sizeof(buffer))) > 0)
-								{
-									if (received > 0)
-									{
-										is_serviced = 1;
-										buffer[received] = 0;
-										add_to_all_socket_fds(&aas_state,
-												buffer);
-										if (option_debug_level > 1)
-										{
-											if (option_debug_level > 2)
-											{
-												log_message("SERIAL>'");
-												for (x = 0; x < received; x++)
-												{
-													log_message("[%02x]",
-															buffer[x]);
-												}
-												log_message("\n");
-											}
-											else
-											{
-												log_message("%s", buffer);
-											}
-										}
-									}
-								}
-
-								if (received < 0)
-								{
-									if (errno != EAGAIN)
-									{
-										log_message(
-												"Serial disconnected on read. errno: %i\n",
-												errno);
-										clear_serial(n);
-									}
-								}
-							}
-							else
-							{
-								errno = 0;
-#ifdef SSL_SUPPORT
-								if (option_ssl)
-								{
-									received = BIO_read(my_fds[n].ssl, buffer, sizeof(buffer));
-									if (received <= 0 && BIO_should_retry(my_fds[n].ssl))
-											continue;
-								}
-								else
-#endif
-								{
-									received = recv(my_fds[n].fd, buffer, sizeof(buffer), 0);
-								}
-								if (received == 0)
-								{
-									log_message("closing socket errno: %i\n",
-											errno);
-									cleanup_fd(n);
-								}
-								else
-								{
-									if (received < 0)
-									{
-										if (errno == EAGAIN || errno == EINTR)
-											continue;
-										log_message(
-												"closing socket errno: %i\n",
-												errno);
-										cleanup_fd(n);
-									}
-									else
-									{
-										is_serviced = 1;
-										buffer[received] = 0;
-										add_to_serial_fd(buffer);
-										if (option_debug_level > 2)
-										{
-											log_message("SOCKET[%i]>", n);
-											for (x = 0; x < strlen(buffer); x++)
-											{
-												log_message("[%02x]", buffer[x]);
-											}
-											log_message("\n");
-										}
-									}
-								}
-							}
-						}
-					} /* end FD_ISSET() */
-				}
-			}
-			/* check every socket to find the one that needs write */
-			for (n = 0; n < MAXCONNECTIONS; n++)
-			{
-				if (my_fds[n].inuse == TRUE)
-				{
-					if (FD_ISSET(my_fds[n].fd,&write_fdset))
-					{
-						if (!fifo_empty(&my_fds[n].send_buffer))
-						{
-							/* set our var to an invalid state */
-							tempbuffer = NULL;
-							if (my_fds[n].fd_type == CLIENT_SOCKET)
-							{
-#ifdef SSL_SUPPORT
-								if (option_ssl)
-								{
-									/* dont try and send till we are ready */
-									if(my_fds[n].handshake_done)
-									{
-										/* load our buffer with data to send */
-										tempbuffer = (char *) fifo_get(
-												&my_fds[n].send_buffer);
-										written = BIO_write(my_fds[n].ssl, tempbuffer, strlen(tempbuffer));
-										if (written <= 0 && BIO_should_retry(my_fds[n].ssl))
-											continue;
-									} else
-									{
-										/* 
-										 * I think this is wrong should be < 0 but retry
-										 * test seems to compensate and it works. If
-										 * the socket went poof it may not though so
-										 * it needs testing. Same as above usage.
-										 * 
-										 * sm.
-										 * 
-										 * http://www.mail-archive.com/ssl-users@lists.cryptsoft.com/msg00538.html
-										 */
-										if (BIO_do_handshake(my_fds[n].ssl) <= 0)
-										{
-											if (!BIO_should_retry(my_fds[n].ssl))
-											{
-												log_message("SSL handshake failed with no retry: %s\n",
-													    ERR_error_string(ERR_get_error(), NULL));
-												cleanup_fd(n);
-											}
-										} else
-										{
-											my_fds[n].handshake_done = TRUE;
-										}
-									}
-								}
-								else
-#endif
-								{
-									/* load our buffer with data to send */
-									tempbuffer = (char *) fifo_get(
-											&my_fds[n].send_buffer);
-									send(my_fds[n].fd, tempbuffer, strlen(tempbuffer), 0);
-								}
-
-								if ( tempbuffer )
-								{
-									is_serviced = 1;
-									if (option_debug_level > 2)
-										log_message("SOCKET[%i]<", n);
-								}
-							}
-							else
-								if (my_fds[n].fd_type == SERIAL)
-								{
-									/* load our buffer with data to send */
-									tempbuffer = (char *) fifo_get(
-											&my_fds[n].send_buffer);
-									errno = 0;
-									is_serviced = 1;
-									if (option_debug_level > 2)
-										log_message("SERIAL[%i]<", n);
-									if (write(my_fds[n].fd, tempbuffer, strlen(
-											tempbuffer)) < 0)
-									{
-										if (errno != EAGAIN)
-										{
-											log_message(
-													"Serial disconnected on write. errno: %i\n",
-													errno);
-											clear_serial(n);
-										}
-
-									}
-								}
-
-							if (option_debug_level > 2 && tempbuffer)
-							{
-								for (x = 0; x < strlen(tempbuffer); x++)
-								{
-									log_message("[%02x]", tempbuffer[x]);
-								}
-								log_message("\n");
-							}
-							
-							if(tempbuffer)
-								free(tempbuffer);
-						}
-						else
-						{
-							if (!serial_connected && !option_keep_connection)
-							{
-								if (my_fds[n].fd_type == CLIENT_SOCKET)
-								{
-									cleanup_fd(n);
-								}
-							}
-						}
-					}
-				}
-			}
-		}
 
 		if (!is_serviced)
 			msleep(20);
@@ -1315,20 +1385,10 @@ void listen_loop()
 }
 
 /*
- Initialize add_to_all_socket_fds_state_t
- */
-void init_add_to_all_socket_fds_state(
-		struct add_to_all_socket_fds_state_t *state)
-{
-	state->line_ended = 0;
-}
-
-/*
  add_to_all_socket_fds
  adds a buffer to ever connected socket fd ie multiplexes
  */
-void add_to_all_socket_fds(struct add_to_all_socket_fds_state_t *state,
-		char * message)
+void add_to_all_socket_fds(char * message)
 {
 
 	char * tempbuffer;
@@ -1346,7 +1406,7 @@ void add_to_all_socket_fds(struct add_to_all_socket_fds_state_t *state,
 			if (my_fds[n].fd_type == CLIENT_SOCKET)
 			{
 				/* caller of fifo_get must free this */
-				if (state->line_ended || !my_fds[n].new)
+				if (line_ended || !my_fds[n].new)
 				{
 					if (my_fds[n].new)
 						my_fds[n].new = FALSE;
@@ -1370,14 +1430,14 @@ void add_to_all_socket_fds(struct add_to_all_socket_fds_state_t *state,
 			}
 		}
 	}
-	state->line_ended = 0;
+	line_ended = 0;
 	if (message)
 	{
 		location = message + strlen(message) - 1;
 		if (location)
 		{
 			if ((*location) == '\n')
-				state->line_ended = 1;
+				line_ended = 1;
 		}
 	}
 }
