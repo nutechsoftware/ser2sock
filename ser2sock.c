@@ -109,6 +109,17 @@ enum FD_TYPES
 	NA, LISTEN_SOCKET = 1, CLIENT_SOCKET, SERIAL
 } fd_types;
 
+#define STREAM_MAIN 0
+#define STREAM_SERIAL 1
+
+char * log_format_type_strings[] =
+{ "", "[\033[1;32m✔\033[0m] ", "[\033[1;33m‼\033[0m] ", "[\033[1;31m✘\033[0m] " };
+enum MESSAGE_TYPES
+{
+	MSG_NONE = 0, MSG_GOOD, MSG_WARN, MSG_BAD
+} msg_types;
+
+
 typedef struct
 {
 	char *name;
@@ -130,6 +141,12 @@ speed_spec speeds[] =
 /* </Types and Constants> */
 
 /* <Structures> */
+
+typedef struct
+{
+  int last;
+  char message[2048];
+} logstream;
 
 typedef struct
 {
@@ -178,8 +195,8 @@ void set_non_blocking(int fd);
 void print_serial_fd_status(int fd);
 int get_baud(char *szbaud);
 void listen_loop();
-void log_message(char *msg, ...);
-void vlog_message(char *msg, va_list arg);
+void log_message(int stream,int type, char *msg, ...);
+void vlog_message(int stream,int type, char *msg, va_list arg);
 void error(char *msg, ...);
 int kbhit();
 int add_fd(int fd, int fd_type);
@@ -206,13 +223,17 @@ void shutdown_ssl_conn(BIO* sslbio);
 /* </Prototypes> */
 
 /* <Globals> */
+
+/* Our process ID and Session ID */
+pid_t pid=0, sid=0;
+
 volatile sig_atomic_t got_hup = 0;
 char * serial_device_name = 0;
 int listen_port = 10000;
 int socket_timeout = 10;
 int listen_backlog = 10;
 FDs my_fds[MAXCONNECTIONS];
-// our listen socket */
+/* our listen socket */
 int listen_sock_fd = -1;
 struct sockaddr_in serv_addr;
 struct sockaddr_in peer_addr;
@@ -251,73 +272,92 @@ void error(char *msg, ...)
 
 	va_list arg;
 	va_start(arg, msg);
-	vlog_message(msg, arg);
+	vlog_message(STREAM_MAIN,MSG_BAD, msg, arg);
 	va_end(arg);
 
-	log_message(" :");
-	log_message(szError);
-	log_message("\n");
-	log_message("exiting\n");
+	log_message(STREAM_MAIN,MSG_BAD, " :");
+	log_message(STREAM_MAIN,MSG_BAD, szError);
+	log_message(STREAM_MAIN,MSG_BAD, "\n");
+	log_message(STREAM_MAIN,MSG_BAD, "exiting\n");
 	exit(EXIT_FAILURE);
 }
 
 /*
  log a message to console or syslog
  */
-void log_message(char *msg, ...)
+void log_message(int stream, int type,char *msg, ...)
 {
+	va_list arg;
+
 	if (msg)
 	{
-		va_list arg;
 		va_start(arg, msg);
-		vlog_message(msg, arg);
+		vlog_message(stream,type, msg, arg);
 		va_end(arg);
 	}
 }
 
-void vlog_message(char *msg, va_list arg)
+void vlog_message(int s,int type, char *msg, va_list arg)
 {
-	static char message[2048];
-	static int last = 0;
+	/* 2 queue's so we can watch 2 log streams for \n's static so auto init to 0's */
+	static logstream ls[2];
+
+	static BOOL syslog_open=FALSE;
+
 	int x,y,z=0;
 	BOOL done=FALSE;
-	last += vsnprintf(&message[last], sizeof(message) - last, msg, arg);
+
+	if (option_daemonize && !syslog_open) {
+		openlog(DAEMON_NAME, LOG_CONS | LOG_NDELAY | LOG_PERROR | LOG_PID,
+				LOG_USER);
+		syslog_open=TRUE;
+	}
+
+	ls[s].last += vsnprintf(&ls[s].message[ls[s].last], sizeof(ls[0].message) - ls[s].last, msg, arg);
 
 	/* check for overflow error */
-	if (last >= sizeof(message))
-		last = 0;
+	if (ls[s].last >= sizeof(ls[0].message))
+		ls[s].last = 0;
 
-	if (last) {
+	if (ls[s].last) {
 		/* keep trying till we exause all \n's */
 		while(!done)
 		{
 			/* look for an eol char */
-			for (x = 0; x < last ; x++) {
+			for (x = 0; x < ls[s].last ; x++) {
 
-				if(message[x] == '\n' || message[x] == '\r') {
+				if(ls[s].message[x] == '\n' || ls[s].message[x] == '\r') {
 
-					message[x]=0;
+					ls[s].message[x]=0;
 					if(x)
 					{
 						if (option_daemonize)
 						{
-							syslog(LOG_INFO, "%s", message);
+							if (type)
+								syslog(LOG_INFO, "%s%s", log_format_type_strings[type], ls[s].message);
+							else
+								syslog(LOG_INFO, "%s", ls[s].message);
 						}
 						else
 						{
-							fprintf(stderr, "%s\n", message);
+							if (type)
+								fprintf(stderr, "%s%s\n", log_format_type_strings[type], ls[s].message);
+							else {
+								fprintf(stderr, "%s\n", ls[s].message);
+								fflush(stderr);
+							}
 						}
 					}
 					/* move the rest to the start and clean out any non printable chars */ 
 					z = 0;
-					for(y = x+1; y < last ; y++) {
-						if((message[y]>0x1f && message[y]<0x7f) || message[y]=='\n') {
-							message[z++]=message[y];
+					for(y = x+1; y < ls[s].last ; y++) {
+						if((ls[s].message[y]>0x1f && ls[s].message[y]<0x7f) || ls[s].message[y]=='\n') {
+							ls[s].message[z++]=ls[s].message[y];
 						}
 					}
 
 					/* set our next fill position */
-					last = z;
+					ls[s].last = z;
 
 					/* again */
 					break;
@@ -454,7 +494,7 @@ int init_listen_socket_fd()
 		listen_sock_fd = socket(AF_INET, SOCK_STREAM, 0);
 		if (listen_sock_fd < 0)
 		{
-			log_message("ERROR creating our listening socket");
+			log_message(STREAM_MAIN, MSG_BAD, "Fatal error creating our listening socket errno: %i\n",errno);
 			return FALSE;
 		}
 
@@ -466,8 +506,8 @@ int init_listen_socket_fd()
 			results = inet_pton(AF_INET, option_bind_ip, &serv_addr.sin_addr);
 			if (results != 1)
 			{
-				log_message("ERROR unable to bind to provided IP %s",
-						option_bind_ip);
+				log_message(STREAM_MAIN, MSG_BAD, "Fatal error unable to bind to provided IP %s errno: %i\n",
+						option_bind_ip,errno);
 				return FALSE;
 			}
 		}
@@ -493,7 +533,7 @@ int init_listen_socket_fd()
 
 		if (bind(listen_sock_fd, (struct sockaddr *) &serv_addr, sizeof(serv_addr))< 0)
 		{
-			log_message("ERROR binding to server port");
+			log_message(STREAM_MAIN, MSG_BAD, "Fatal error binding to server port %i errno: %i\n",listen_port,errno);
 			return FALSE;
 		}
 
@@ -504,7 +544,7 @@ int init_listen_socket_fd()
 
 	add_fd(listen_sock_fd, LISTEN_SOCKET);
 
-	log_message("Listening socket created on port %i\n", listen_port);
+	log_message(STREAM_MAIN, MSG_GOOD, "Listening socket created on port %i\n", listen_port);
 
 	return TRUE;
 }
@@ -522,18 +562,18 @@ int init_serial_fd(char * szPortPath)
 
 	if (fd < 0)
 	{
-		log_message("ERROR. Can't open com port at %s\n", szPortPath);
+		log_message(STREAM_MAIN, MSG_BAD, "Error can not open com port at %s\n", szPortPath);
 		return fd;
 	}
 
-	log_message("opened com port at %s\n", szPortPath);
+	log_message(STREAM_MAIN, MSG_GOOD, "Opened com port at %s\n", szPortPath);
 
 	/* add it and get our structure */
 	id = add_fd(fd, SERIAL);
 
 	if (id < 0)
 	{
-		log_message("ERROR. Can't serial add fd\n");
+		log_message(STREAM_MAIN, MSG_BAD, "Error can not add the serial fd\n");
 		close(fd);
 		return 0;
 	}
@@ -564,36 +604,36 @@ int init_serial_fd(char * szPortPath)
 	newtio.c_cflag |= CS8; /* Select 8 data bits */
 	newtio.c_cflag &= ~CRTSCTS; /* Disable hardware flow control */
 	if (option_debug_level > 2)
-		log_message("c_cflags old:%08x  new:%08x\n", my_fds[id].oldtio.c_cflag,
+		log_message(STREAM_MAIN, MSG_WARN, "c_cflags old:%08x  new:%08x\n", my_fds[id].oldtio.c_cflag,
 				newtio.c_cflag);
 
 	/* change our c_lflag settings enable raw input mode */
 	newtio.c_lflag &= ~(ICANON | ECHO | ISIG);
 	if (option_debug_level > 2)
-		log_message("c_lflags old:%08x  new:%08x\n", my_fds[id].oldtio.c_lflag,
+		log_message(STREAM_MAIN, MSG_WARN, "c_lflags old:%08x  new:%08x\n", my_fds[id].oldtio.c_lflag,
 				newtio.c_lflag);
 
 	/* change our c_iflag settings (turn off all flags) */
 	newtio.c_iflag = 0;
 	if (option_debug_level > 2)
-		log_message("c_iflags old:%08x  new:%08x\n", my_fds[id].oldtio.c_iflag,
+		log_message(STREAM_MAIN, MSG_WARN, "c_iflags old:%08x  new:%08x\n", my_fds[id].oldtio.c_iflag,
 				newtio.c_iflag);
 
 	/* change our c_oflag settings (turn off all flags) */
 	newtio.c_oflag = 0;
 	if (option_debug_level > 2)
-		log_message("c_oflags old:%08x  new:%08x\n", my_fds[id].oldtio.c_oflag,
+		log_message(STREAM_MAIN, MSG_WARN, "c_oflags old:%08x  new:%08x\n", my_fds[id].oldtio.c_oflag,
 				newtio.c_oflag);
 
 	/* dump bytes out of old c_cc */
 	if (option_debug_level > 2)
 	{
-		log_message("c_cc old: ");
+		log_message(STREAM_MAIN, MSG_WARN, "c_cc old: ");
 		for (x = 0; x < sizeof(my_fds[id].oldtio.c_cc); x++)
 		{
-			log_message("%02x:", my_fds[id].oldtio.c_cc[x]);
+			log_message(STREAM_MAIN, MSG_WARN, "%02x:", my_fds[id].oldtio.c_cc[x]);
 		}
-		log_message("\n");
+		log_message(STREAM_MAIN, MSG_WARN, "\n");
 	}
 
 	newtio.c_cc[VINTR] = 0; /* Ctrl-c */
@@ -622,12 +662,12 @@ int init_serial_fd(char * szPortPath)
 	/* dump bytes out of new c_cc */
 	if (option_debug_level > 2)
 	{
-		log_message("c_cc new: ");
+		log_message(STREAM_MAIN, MSG_WARN, "c_cc new: ");
 		for (x = 0; x < sizeof(newtio.c_cc); x++)
 		{
-			log_message("%02x:", newtio.c_cc[x]);
+			log_message(STREAM_MAIN, MSG_WARN, "%02x:", newtio.c_cc[x]);
 		}
-		log_message("\n");
+		log_message(STREAM_MAIN, MSG_WARN, "\n");
 	}
 
 	tcflush(fd, TCIFLUSH);
@@ -646,20 +686,20 @@ void print_serial_fd_status(int fd)
 	int status;
 	unsigned int arg;
 	status = ioctl(fd, TIOCMGET, &arg);
-	log_message("Serial Status (%i) ",status);
+	log_message(STREAM_MAIN, MSG_GOOD, "Serial status (%i) ",status);
 	if (arg & TIOCM_RTS)
-		log_message("RTS ");
+		log_message(STREAM_MAIN, MSG_GOOD, "RTS ");
 	if (arg & TIOCM_CTS)
-		log_message("CTS ");
+		log_message(STREAM_MAIN, MSG_GOOD, "CTS ");
 	if (arg & TIOCM_DSR)
-		log_message("DSR ");
+		log_message(STREAM_MAIN, MSG_GOOD, "DSR ");
 	if (arg & TIOCM_CAR)
-		log_message("DCD ");
+		log_message(STREAM_MAIN, MSG_GOOD, "DCD ");
 	if (arg & TIOCM_DTR)
-		log_message("DTR ");
+		log_message(STREAM_MAIN, MSG_GOOD, "DTR ");
 	if (arg & TIOCM_RNG)
-		log_message("RI ");
-	log_message("\r\n");
+		log_message(STREAM_MAIN, MSG_GOOD, "RI ");
+	log_message(STREAM_MAIN, MSG_GOOD, "\n");
 }
 
 /*
@@ -683,7 +723,7 @@ int get_baud(char * szbaud)
 	/* default to 3 in our array or 9600 */
 	if (speed == 0)
 		s = &speeds[3];
-	log_message("setting speed %s\n", s->name);
+	log_message(STREAM_MAIN, MSG_GOOD, "Setting speed %s\n", s->name);
 	return s->flag;
 }
 
@@ -696,7 +736,7 @@ void set_non_blocking(int fd)
 	int res = 1;
 	nonb |= O_NONBLOCK;
 	if (ioctl(fd, FIONBIO, &res) < 0)
-		error("ERROR setting FIONBIO failed\n");
+		error("Error setting FIONBIO");
 }
 
 /*
@@ -713,7 +753,7 @@ int add_fd(int fd, int fd_type)
 		if (my_fds[x].inuse == FALSE)
 		{
 			if (option_debug_level > 2)
-				log_message("adding %s fd at %i\n", fd_type_strings[fd_type], x);
+				log_message(STREAM_MAIN, MSG_WARN, "Adding %s fd at %i\n", fd_type_strings[fd_type], x);
 
 			if (fd_type != SERIAL)
 			{
@@ -868,7 +908,7 @@ void poll_serial_port()
 			{
 				if (ioctl(my_fds[n].fd, TIOCMGET, &tmp) < 0)
 				{
-					log_message("Serial disconnected on check. errno: %i\n",errno);
+					log_message(STREAM_MAIN, MSG_WARN, "Serial disconnected on check. errno: %i\n",errno);
 					clear_serial(n);
 				}
 				/* currently only 1 serial port so we are done */
@@ -918,7 +958,7 @@ BOOL poll_exception_fdset(fd_set *except_fdset)
 				if (my_fds[n].fd_type == CLIENT_SOCKET)
 				{
 					did_work = TRUE;
-					log_message("closing socket on exception\n");
+					log_message(STREAM_MAIN, MSG_WARN, "Exception occured on socket fd slot %i closing the socket.\n",n);
 					cleanup_fd(n);
 				}
 			}
@@ -966,7 +1006,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 					{
 						if (BIO_do_accept(abio) <= 0) 
 						{
-							log_message("SSL BIO_do_accept failed: %s\n", 
+							log_message(STREAM_MAIN, MSG_BAD, "SSL BIO_do_accept failed: %s\n",
 								    ERR_error_string(ERR_get_error(), NULL));
 						} else 
 						{
@@ -975,7 +1015,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 							
 							if (!newbio) 
 							{
-								log_message("SSL accept BIO_pop failed: %s\n", 
+								log_message(STREAM_MAIN, MSG_BAD, "SSL BIO_pop failed: %s\n",
 								    ERR_error_string(ERR_get_error(), NULL));
 							} else 
 							{
@@ -1003,7 +1043,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 								{
 									if (!BIO_should_retry(newbio))
 									{
-										log_message("SSL handshake failed with no retry: %s\n",
+										log_message(STREAM_MAIN, MSG_BAD, "SSL handshake failed with no retry: %s\n",
 											    ERR_error_string(ERR_get_error(), NULL));
 										shutdown_ssl_conn(newbio);
 										close(newsockfd);
@@ -1023,7 +1063,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 								if (option_ssl && newbio != NULL)
 									my_fds[added_slot].ssl = newbio;
 #endif
-								log_message("socket connected\n");
+								log_message(STREAM_MAIN, MSG_GOOD, "Socket connected slot %i\n",added_slot);
 								/* adding anything to the fifo must be pre allocated */
 								if (option_send_terminal_init)
 								{
@@ -1064,7 +1104,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 #endif
 								close(newsockfd);
 								if(added_slot == -1)
-								log_message("socket refused because no more space\n");
+								log_message(STREAM_MAIN, MSG_WARN, "Socket refused because no more space\n");
 							}
 						}
 						else
@@ -1074,7 +1114,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 							      shutdown_ssl_conn(newbio);
 #endif
 							close(newsockfd);
-							log_message("socket refused because serial is not connected\n");
+							log_message(STREAM_MAIN, MSG_WARN, "Socket refused because serial is not connected\n");
 						}
 					}
 
@@ -1096,17 +1136,17 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 								{
 									if (option_debug_level > 2)
 									{
-										log_message("SERIAL>'");
+										log_message(STREAM_MAIN, MSG_WARN, "SERIAL>'");
 										for (x = 0; x < received; x++)
 										{
-											log_message("[%02x]",
+											log_message(STREAM_MAIN, MSG_WARN, "[%02x]",
 													buffer[x]);
 										}
-										log_message("\n");
+										log_message(STREAM_MAIN, MSG_WARN, "\n");
 									}
 									else
 									{
-										log_message("%s", buffer);
+										log_message(STREAM_SERIAL, MSG_WARN, "%s", buffer);
 									}
 								}
 							}
@@ -1116,7 +1156,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 						{
 							if (errno != EAGAIN)
 							{
-								log_message(
+								log_message(STREAM_MAIN, MSG_WARN,
 										"Serial disconnected on read. errno: %i\n",
 										errno);
 								clear_serial(n);
@@ -1140,7 +1180,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 						}
 						if (received == 0)
 						{
-							log_message("closing socket errno: %i\n",
+							log_message(STREAM_MAIN, MSG_WARN, "Closing socket fd slot %i errno: %i\n",n,
 									errno);
 							cleanup_fd(n);
 						}
@@ -1150,8 +1190,8 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 							{
 								if (errno == EAGAIN || errno == EINTR)
 									continue;
-								log_message(
-										"closing socket errno: %i\n",
+								log_message(STREAM_MAIN, MSG_WARN,
+										"Closing socket errno: %i\n",
 										errno);
 								cleanup_fd(n);
 							}
@@ -1162,12 +1202,12 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 								add_to_serial_fd(buffer);
 								if (option_debug_level > 2)
 								{
-									log_message("SOCKET[%i]>", n);
+									log_message(STREAM_MAIN, MSG_WARN, "SOCKET[%i]>", n);
 									for (x = 0; x < strlen(buffer); x++)
 									{
-										log_message("[%02x]", buffer[x]);
+										log_message(STREAM_MAIN, MSG_WARN, "[%02x]", buffer[x]);
 									}
-									log_message("\n");
+									log_message(STREAM_MAIN, MSG_WARN, "\n");
 								}
 							}
 						}
@@ -1221,7 +1261,7 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 							{
 								if (!BIO_should_retry(my_fds[n].ssl))
 								{
-									log_message("SSL handshake failed with no retry: %s\n",
+									log_message(STREAM_MAIN, MSG_BAD, "SSL handshake failed with no retry: %s\n",
 										    ERR_error_string(ERR_get_error(), NULL));
 									cleanup_fd(n);
 								}
@@ -1245,7 +1285,7 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 					{
 						did_work = TRUE;
 						if (option_debug_level > 2)
-							log_message("SOCKET[%i]<", n);
+							log_message(STREAM_MAIN, MSG_WARN, "SOCKET[%i]<", n);
 					}
 				}
 
@@ -1258,13 +1298,13 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 					errno = 0;
 					did_work = TRUE;
 					if (option_debug_level > 2)
-						log_message("SERIAL[%i]<", n);
+						log_message(STREAM_MAIN, MSG_WARN, "SERIAL[%i]<", n);
 					if (write(my_fds[n].fd, tempbuffer, strlen(
 							tempbuffer)) < 0)
 					{
 						if (errno != EAGAIN)
 						{
-							log_message(
+							log_message(STREAM_MAIN, MSG_BAD,
 									"Serial disconnected on write. errno: %i\n",
 									errno);
 							clear_serial(n);
@@ -1277,9 +1317,9 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 				{
 					for (x = 0; x < strlen(tempbuffer); x++)
 					{
-						log_message("[%02x]", tempbuffer[x]);
+						log_message(STREAM_MAIN, MSG_WARN, "[%02x]", tempbuffer[x]);
 					}
-					log_message("\n");
+					log_message(STREAM_MAIN, MSG_WARN, "\n");
 				}
 
 				/* free up memory */	
@@ -1319,13 +1359,13 @@ void listen_loop()
 	// Set high thread priority
 	struct sched_param param;
 
-	log_message("Set high thread priority\n");
+	log_message(STREAM_MAIN, MSG_GOOD, "Seting thread priority to HIGH\n");
 	memset(&param,0,sizeof(param));
 	param.__sched_priority = sched_get_priority_min(SCHED_RR);
 	sched_setscheduler(0,SCHED_RR,&param);
 #endif
 
-	log_message("Start wait loop\n");
+	log_message(STREAM_MAIN, MSG_GOOD, "Start wait loop\n");
 
 	/* continue polling until interrupted */
 	while (!kbhit())
@@ -1360,7 +1400,7 @@ void listen_loop()
 		n = select(FD_SETSIZE, &read_fdset, &write_fdset, &except_fdset, &wait);
 		if (n == -1)
 		{
-			log_message("select error %i\n",errno);
+			log_message(STREAM_MAIN, MSG_BAD, "An error occured during select() errno: %i\n",errno);
 			continue;
 		}
 
@@ -1380,10 +1420,11 @@ void listen_loop()
 			msleep(20);
 	}
 
-	log_message("\ncleaning up\n");
+	log_message(STREAM_MAIN, MSG_NONE, "\n");
+	log_message(STREAM_MAIN, MSG_GOOD, "cleaning up\n");
 	free_system();
 
-	log_message("done.\n");
+	log_message(STREAM_MAIN, MSG_GOOD, "done.\n");
 }
 
 /*
@@ -1545,7 +1586,7 @@ int parse_args(int argc, char * argv[])
 
 				default:
 					show_help(argv[0]);
-					error("ERROR Wrong argument: %s\n", loc_argv[1]);
+					error("ERROR Wrong argument: %s", loc_argv[1]);
 					exit(EXIT_FAILURE);
 			}
 
@@ -1556,7 +1597,7 @@ int parse_args(int argc, char * argv[])
 	if (serial_device_name == 0)
 	{
 		show_help(argv[0]);
-		log_message("Error missing serial device name exiting\n");
+		log_message(STREAM_MAIN, MSG_BAD, "Error missing serial device name exiting\n");
 		exit(EXIT_FAILURE);
 	}
 	return TRUE;
@@ -1573,12 +1614,12 @@ static void writepid(void)
 	{
 		snprintf(buff, 20, "%d\n", (int) getpid());
 		if (write(fd, buff, strlen(buff)) == -1)
-			log_message("Error writing to pid file %s", PID_FILE);
+			log_message(STREAM_MAIN, MSG_WARN, "Error writing to pid file %s\n", PID_FILE);
 		close(fd);
 		return;
 	}
 	else
-		log_message("Error opening pid file %s", PID_FILE);
+		log_message(STREAM_MAIN, MSG_WARN, "Error opening pid file %s\n", PID_FILE);
 }
 
 /*
@@ -1591,19 +1632,16 @@ int main(int argc, char *argv[])
 	/* parse args and set global vars as needed */
 	parse_args(argc, argv);
 
-	if (option_daemonize)
-	{
-		openlog(DAEMON_NAME, LOG_CONS | LOG_NDELAY | LOG_PERROR | LOG_PID,
-				LOG_USER);
-	}
+	if(config_read)
+		log_message(STREAM_MAIN, MSG_GOOD, "Using config file: %s\n", CONFIG_PATH);
 
 
 	/* startup banner and args check */
-	log_message("Serial 2 Socket Relay version %s starting\n", SER2SOCK_VERSION);
+	log_message(STREAM_MAIN, MSG_GOOD, "Serial 2 Socket Relay version %s starting\n", SER2SOCK_VERSION);
 	if (!config_read && argc < 2)
 	{
 		show_help(argv[0]);
-		log_message("ERROR insufficient arguments\n");
+		log_message(STREAM_MAIN, MSG_BAD, "ERROR insufficient arguments\n");
 		exit(EXIT_FAILURE);
 	}
 
@@ -1613,15 +1651,12 @@ int main(int argc, char *argv[])
 	/* initialize our listening socket */
 	if (!init_listen_socket_fd())
 	{
-		error("ERROR initializing listen socket\n");
+		error("ERROR initializing listen socket");
 	}
-
-	/* Our process ID and Session ID */
-	pid_t pid, sid;
 
 	if (option_daemonize)
 	{
-		syslog(LOG_INFO, "daemonizing the process");
+		log_message(STREAM_MAIN, MSG_GOOD, "daemonizing the process\n");
 
 		/* Fork off the parent process */
 		pid = fork();
@@ -1638,7 +1673,9 @@ int main(int argc, char *argv[])
 		}
 		else
 		{
-			openlog(DAEMON_NAME, LOG_NDELAY | LOG_PID, LOG_USER);
+			/* close and re open with different settings no LOG_PERROR */
+			closelog();
+			openlog(DAEMON_NAME, LOG_CONS | LOG_NDELAY | LOG_PID, LOG_USER);
 		}
 
 		/* Change the file mode mask */
@@ -1687,18 +1724,18 @@ void signal_handler(int sig)
 	switch (sig)
 	{
 		case SIGHUP:
-			syslog(LOG_INFO, "Received SIGHUP signal.");
+			log_message(STREAM_MAIN, MSG_WARN, "Received SIGHUP signal.\n");
 			got_hup = 1;
 			break;
 		case SIGTERM:
-			syslog(LOG_WARNING, "Received SIGTERM signal.");
-			log_message("cleaning up\n");
+			log_message(STREAM_MAIN, MSG_WARN, "Received SIGTERM signal.\n");
+			log_message(STREAM_MAIN, MSG_GOOD, "Cleaning up\n");
 			free_system();
-			log_message("done.\n");
+			log_message(STREAM_MAIN, MSG_GOOD, "done.\n");
 			exit(EXIT_SUCCESS);
 			break;
 		default:
-			syslog(LOG_WARNING, "Unhandled signal (%d) %s", sig, strsignal(sig));
+			log_message(STREAM_MAIN, MSG_WARN, "Unhandled signal (%d) %s\n", sig, strsignal(sig));
 			break;
 	}
 }
@@ -1736,7 +1773,6 @@ BOOL read_config(char* filename)
 
 	if ((fp = fopen(filename, "r")) != NULL)
 	{
-		log_message("Using config file: %s\n", filename);
 
 		while (!feof(fp))
 		{
@@ -1903,17 +1939,17 @@ void fifo_clear(fifo *f)
 {
 	void *p;
 	if (option_debug_level > 2)
-		log_message("clearning fifo: ");
+		log_message(STREAM_MAIN, MSG_GOOD, "Clearing fifo queue: ");
 	while (!fifo_empty(f))
 	{
 		if (option_debug_level > 2)
-			log_message("*");
+			log_message(STREAM_MAIN, MSG_GOOD, "*");
 		p = fifo_get(f);
 		if (p)
 			free(p);
 	}
 	if (option_debug_level > 2)
-		log_message(" done.\n");
+		log_message(STREAM_MAIN, MSG_GOOD, " done.\n");
 }
 
 /*
@@ -1978,14 +2014,14 @@ BOOL init_ssl()
 	use_cert = SSL_CTX_use_certificate_file(sslctx, option_ssl_certificate , SSL_FILETYPE_PEM);
 	if (use_cert <= 0)
 	{
-		log_message("Loading certificate failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
+		log_message(STREAM_MAIN, MSG_BAD, "Loading certificate failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
 		return FALSE;
 	}
 
 	use_prv = SSL_CTX_use_PrivateKey_file(sslctx, option_ssl_key, SSL_FILETYPE_PEM);
 	if (use_prv <= 0)
 	{
-		log_message("Loading private key failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
+		log_message(STREAM_MAIN, MSG_BAD, "Loading private key failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
 		return FALSE;
 	}
 
@@ -1995,7 +2031,7 @@ BOOL init_ssl()
 	// Load trusted CA.
 	if (!SSL_CTX_load_verify_locations(sslctx, option_ca_certificate, NULL))
 	{
-		log_message("Loading CA cert failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
+		log_message(STREAM_MAIN, MSG_BAD, "Loading CA cert failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
 		return FALSE;
 	}
 
@@ -2019,7 +2055,7 @@ BOOL init_ssl()
 	// NOTE: This first accept is required.
 	if (BIO_do_accept(abio) <= 0)
 	{
-		log_message("SSL accept-1 failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
+		log_message(STREAM_MAIN, MSG_BAD, "SSL accept-1 failed: %s\n", ERR_error_string(ERR_get_error(), NULL));
 		return FALSE;
 	}
 
