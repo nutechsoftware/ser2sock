@@ -46,7 +46,7 @@
  *		  1.4.1 08/17/13 Add compiler switches cleanup tabification --SM
  *		  1.4.2 09/05/13 Added configuration support. --SAP
  *		  1.4.3 10/24/13 SSL support improvements and some cleanup --SM
- * 		  1.4.4 10/25/13 refactor main state machine -SM
+ * 		  1.4.4 10/25/13 refactor main state machine, logging, cleanup -SM
  *
  \******************************************************************************/
 #define _GNU_SOURCE
