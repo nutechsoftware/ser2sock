@@ -112,7 +112,11 @@ enum FD_TYPES
 #define STREAM_MAIN 0
 #define STREAM_SERIAL 1
 
-char * log_format_type_strings[] =
+char * syslog_format_type_strings[] =
+{ "", "[✔] ", "[‼] ", "[✘] " };
+int syslog_format_type_priority[] =
+{ LOG_INFO, LOG_INFO, LOG_WARNING, LOG_ERR };
+char * stderr_format_type_strings[] =
 { "", "[\033[1;32m✔\033[0m] ", "[\033[1;33m‼\033[0m] ", "[\033[1;31m✘\033[0m] " };
 enum MESSAGE_TYPES
 {
@@ -333,15 +337,18 @@ void vlog_message(int s,int type, char *msg, va_list arg)
 					{
 						if (option_daemonize)
 						{
-							if (type)
-								syslog(LOG_INFO, "%s%s", log_format_type_strings[type], ls[s].message);
+							if (type) {
+								
+								syslog(syslog_format_type_priority[type], "%s%s", 
+								       syslog_format_type_strings[type], ls[s].message);
+							}
 							else
 								syslog(LOG_INFO, "%s", ls[s].message);
 						}
 						else
 						{
 							if (type)
-								fprintf(stderr, "%s%s\n", log_format_type_strings[type], ls[s].message);
+								fprintf(stderr, "%s%s\n", stderr_format_type_strings[type], ls[s].message);
 							else {
 								fprintf(stderr, "%s\n", ls[s].message);
 								fflush(stderr);
