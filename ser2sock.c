@@ -788,6 +788,7 @@ int cleanup_fd(int n)
 		if (my_fds[n].fd_type == SERIAL)
 		{
 			tcsetattr(my_fds[n].fd, TCSANOW, &my_fds[n].oldtio);
+			serial_connected = FALSE;
 		}
 
 #ifdef SSL_SUPPORT
@@ -843,7 +844,6 @@ long get_time_difference(struct timeval *startTime)
  */
 BOOL hup_check() 
 {
-	int n;
 	
 	/* did we get a hup signal? */
 	if (!got_hup) 
@@ -851,13 +851,6 @@ BOOL hup_check()
 	
 	/* clear it */
 	got_hup = 0;
-
-	/* do hup stuff */
-	for (n = 0; n < MAXCONNECTIONS; n++)
-	{
-		if (my_fds[n].inuse == TRUE && my_fds[n].fd_type == SERIAL)
-			clear_serial(n);
-	}
 
 	free_system();
 	read_config(CONFIG_PATH);
