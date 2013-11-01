@@ -46,7 +46,7 @@
  *		  1.4.1 08/17/13 Add compiler switches cleanup tabification --SM
  *		  1.4.2 09/05/13 Added configuration support. --SAP
  *		  1.4.3 10/24/13 SSL support improvements and some cleanup --SM
- * 		  1.4.4 10/25/13 refactor main state machine, logging, cleanup -SM
+ *		  1.4.4 10/25/13 refactor main state machine, logging, cleanup -SM
  *
  \******************************************************************************/
 #define _GNU_SOURCE
@@ -223,6 +223,13 @@ static void writepid(void);
 BOOL init_ssl();
 void shutdown_ssl();
 void shutdown_ssl_conn(BIO* sslbio);
+#ifdef SSL_DEBUGING
+long    tls_bio_dump_cb(BIO *bio, int cmd, const char *argp, int argi,
+			        long unused_argl, long ret);
+void apps_ssl_info_callback(const SSL *s, int where, int ret);
+void ssl_msg_callback(int write_p, int version, int content_type,
+		 const void *buf, size_t len, SSL * ssl, void *arg);
+#endif
 #endif
 /* </Prototypes> */
 
@@ -2047,6 +2054,13 @@ BOOL init_ssl()
 	SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY);
 	BIO_set_nbio(bio, 1);	// Non-blocking on.
 
+#ifdef SSL_DEBUGING
+	/* debug ssl do not use in production just testing */
+	BIO_set_callback(bio,tls_bio_dump_cb);
+	SSL_set_info_callback(ssl, apps_ssl_info_callback);
+	SSL_set_msg_callback(ssl, ssl_msg_callback);
+#endif
+
 	sprintf(port_string, "%d", listen_port);
 	abio = BIO_new_accept(port_string);
 	BIO_set_accept_bios(abio, bio);
@@ -2084,5 +2098,159 @@ void shutdown_ssl_conn(BIO* sslbio)
 	BIO *tmp=BIO_pop(sslbio);
 	BIO_free_all(tmp);
 }
+
+#ifdef SSL_DEBUGING
+/*
+ * Every sent & received message this callback function is invoked,
+ * so we know when alert messages have arrived or are sent and
+ * we can print debug information about TLS handshake. This is
+ * debug code and should not be used in production it is not 
+ * well tested.
+ */
+void ssl_msg_callback(int write_p, int version, int content_type,
+		 const void *buf, size_t len, SSL * ssl, void *arg)
+{
+	char string[2048];
+	char sbuf[2048];
+	unsigned char code;
+	bzero(string, sizeof(string));
+	strcat(string,"msg_callback");
+	if(write_p)
+		strcat(string," -> ");
+	else
+		strcat(string," <- ");
+
+
+	switch(content_type) {
+
+	case SSL3_RT_ALERT:
+		strcat(string, "Alert: ");
+		code = ((const unsigned char *)buf)[1];
+		strcat(string, SSL_alert_desc_string_long(code));
+		break;
+
+	case SSL3_RT_CHANGE_CIPHER_SPEC:
+		strcat(string, "ChangeCipherSpec");
+		break;
+
+	case SSL3_RT_HANDSHAKE:
+
+		strcat(string, "Handshake: ");
+		code = ((const unsigned char *)buf)[0];
+
+		switch(code) {
+			case SSL3_MT_HELLO_REQUEST:
+				strcat(string,"Hello Request");
+				break;
+			case SSL3_MT_CLIENT_HELLO:
+				strcat(string,"Client Hello");
+				break;
+			case SSL3_MT_SERVER_HELLO:
+				strcat(string,"Server Hello");
+				break;
+			case SSL3_MT_CERTIFICATE:
+				strcat(string,"Certificate");
+				break;
+			case SSL3_MT_SERVER_KEY_EXCHANGE:
+				strcat(string,"Server Key Exchange");
+				break;
+			case SSL3_MT_CERTIFICATE_REQUEST:
+				strcat(string,"Certificate Request");
+				break;
+			case SSL3_MT_SERVER_DONE:
+				strcat(string,"Server Hello Done");
+				break;
+			case SSL3_MT_CERTIFICATE_VERIFY:
+				strcat(string,"Certificate Verify");
+				break;
+			case SSL3_MT_CLIENT_KEY_EXCHANGE:
+				strcat(string,"Client Key Exchange");
+				break;
+			case SSL3_MT_FINISHED:
+				strcat(string,"Finished");
+				break;
+
+			default:
+				sprintf( sbuf, "Handshake: Unknown SSL3 code received: %d", code );
+				strcat( string, sbuf);
+		}
+		break;
+
+	default:
+		sprintf( sbuf, "SSL message contains unknown content type: %d", content_type );
+		strcat( string, sbuf);
+	}
+
+	log_message(STREAM_MAIN, MSG_WARN, "%s\n", string);
+
+}
+
+long    tls_bio_dump_cb(BIO *bio, int cmd, const char *argp, int argi,
+			long unused_argl, long ret)
+{
+	if (cmd == (BIO_CB_READ | BIO_CB_RETURN)) {
+		log_message(STREAM_MAIN, MSG_WARN,
+		    "read from %08lX [%08lX] (%d bytes => %ld (0x%lX))\n",
+		 (unsigned long) bio, (unsigned long) argp, argi,
+		 ret, (unsigned long) ret);
+	} else if (cmd == (BIO_CB_WRITE | BIO_CB_RETURN)) {
+	log_message(STREAM_MAIN, MSG_WARN,
+		    "write to %08lX [%08lX] (%d bytes => %ld (0x%lX))\n",
+		 (unsigned long) bio, (unsigned long) argp, argi,
+		 ret, (unsigned long) ret);
+	}
+	return (ret);
+}
+
+void apps_ssl_info_callback(const SSL *s, int where, int ret)
+{
+	char string[2048];
+	char sbuf[2048];
+	const char *str;
+	int w;
+
+	bzero(string, sizeof(string));
+
+	w=where& ~SSL_ST_MASK;
+	if (w & SSL_ST_CONNECT) strcat(string,"SSL_connect ");
+	else if (w & SSL_ST_ACCEPT) strcat(string,"SSL_accept ");
+	else strcat(string,"undefined ");
+
+	strcat(string,"statestr ");
+	//strcat(string,SSL_state_string_long(s));
+
+	if (where & SSL_CB_LOOP)
+	{
+		sprintf(sbuf, " %s", SSL_state_string_long(s));
+		strcat( string, sbuf);
+	}
+	else if (where & SSL_CB_ALERT)
+	{
+		str=(where & SSL_CB_READ)?"read":"write";
+		sprintf(sbuf," SSL3 alert %s:%s:%s",
+			str,
+			SSL_alert_type_string_long(ret),
+			SSL_alert_desc_string_long(ret));
+		strcat( string, sbuf);
+	}
+	else if (where & SSL_CB_EXIT)
+	{
+		if (ret == 0) {
+			sprintf(sbuf," :failed in %s",
+				SSL_state_string_long(s));
+			strcat( string, sbuf);
+		}
+		else if (ret < 0)
+		{
+			sprintf(sbuf," error in %s",
+				SSL_state_string_long(s));
+			strcat( string, sbuf);
+		}
+	}
+	log_message(STREAM_MAIN, MSG_WARN, "%s\n", string);
+
+}
+#endif
+
 #endif
 /* </Code> */
