@@ -2,3 +2,9 @@ ser2sock
 *.o
 *.pem
 *.key
+Makefile
+.deps/*
+config.h
+config.log
+config.status
+stamp-h1
