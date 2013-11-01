@@ -3699,7 +3699,7 @@ else
 fi
 
 
-LIBSSL =
+LIBSSL=
 if test "x$with_ssl" != xno; then :
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking for SSL_library_init in -lssl" >&5
 $as_echo_n "checking for SSL_library_init in -lssl... " >&6; }
