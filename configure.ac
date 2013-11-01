@@ -14,7 +14,7 @@ AC_PROG_CC
 AC_ARG_WITH([ssl], [AS_HELP_STRING([--without-ssl], [disable support for OpenSSL])], [], [with_ssl=yes])
 
 LIBSSL=AS_IF([test "x$with_ssl" != xno],
-                [AC_CHECK_LIB([ssl], [SSL_library_init], [], [AC_MSG_FAILURE([ssl test failed (--without-ssl to disable)])], [-lssl])])
+                [AC_CHECK_LIB([ssl], [SSL_library_init], [], [AC_MSG_FAILURE([ssl test failed (--without-ssl to disable)])], [-lcrypto])])
 
 AC_ARG_ENABLE([vswtc], [AS_HELP_STRING([--enable-vswtc], [enable VSWTC for termios])], [enable_vswtc=yes], [])
 AS_IF([test "x$enable_vswtc" == xyes], [AC_DEFINE(VSWTC, [], [Define if you need VSWTC])])
