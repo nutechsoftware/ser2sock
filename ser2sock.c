@@ -51,6 +51,8 @@
  \******************************************************************************/
 #define _GNU_SOURCE
 
+#include "config.h"
+
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -76,7 +78,7 @@
 #include <sched.h>
 #endif
 
-#ifdef SSL_SUPPORT
+#ifdef HAVE_LIBSSL
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -167,7 +169,7 @@ typedef struct
 
 	/* the fd */
 	int fd;
-#ifdef SSL_SUPPORT
+#ifdef HAVE_LIBSSL
 	/* SSL descriptor */
 	BIO* ssl;
 	BOOL handshake_done;
@@ -219,7 +221,7 @@ void* fifo_get(fifo *f);
 void fifo_clear(fifo *f);
 static void writepid(void);
 
-#ifdef SSL_SUPPORT
+#ifdef HAVE_LIBSSL
 BOOL init_ssl();
 void shutdown_ssl();
 void shutdown_ssl_conn(BIO* sslbio);
@@ -261,7 +263,7 @@ int line_ended = 0;
 int serial_connected = 0;
 struct timeval tv_serial_start, tv_last_serial_check;
 
-#ifdef SSL_SUPPORT
+#ifdef HAVE_LIBSSL
 BOOL option_ssl = FALSE;
 SSL_CTX* sslctx = 0;
 BIO* bio = 0, *abio = 0;
@@ -345,8 +347,8 @@ void vlog_message(int s,int type, char *msg, va_list arg)
 						if (option_daemonize)
 						{
 							if (type) {
-								
-								syslog(syslog_format_type_priority[type], "%s%s", 
+
+								syslog(syslog_format_type_priority[type], "%s%s",
 								       syslog_format_type_strings[type], ls[s].message);
 							}
 							else
@@ -362,7 +364,7 @@ void vlog_message(int s,int type, char *msg, va_list arg)
 							}
 						}
 					}
-					/* move the rest to the start and clean out any non printable chars */ 
+					/* move the rest to the start and clean out any non printable chars */
 					z = 0;
 					for(y = x+1; y < ls[s].last ; y++) {
 						if((ls[s].message[y]>0x1f && ls[s].message[y]<0x7f) || ls[s].message[y]=='\n') {
@@ -378,7 +380,7 @@ void vlog_message(int s,int type, char *msg, va_list arg)
 				}
 			}
 			/* ok we reached the end of our buffer and found no more \n's */
-			done = TRUE; 
+			done = TRUE;
 		}
 	}
 }
@@ -429,7 +431,7 @@ void show_help(const char *appName)
 				"  -g                        debug level 0-3\n"
 				"  -c                        keep incoming connections when a serial device is disconnected\n"
 				"  -w milliseconds           delay between attempts to open a serial device (5000)\n"
-#ifdef SSL_SUPPORT
+#ifdef HAVE_LIBSSL
 				"  -e                        use SSL to encrypt the connection\n"
 #endif
 				"\n", appName);
@@ -447,7 +449,7 @@ int init_system()
 		my_fds[x].new = TRUE;
 		my_fds[x].fd = -1;
 		my_fds[x].fd_type = NA;
-#ifdef SSL_SUPPORT
+#ifdef HAVE_LIBSSL
 		my_fds[x].ssl = 0;
 		my_fds[x].handshake_done = FALSE;
 #endif
@@ -480,7 +482,7 @@ int free_system()
 		cleanup_fd(x);
 		fifo_destroy(&my_fds[x].send_buffer);
 	}
-#ifdef SSL_SUPPORT
+#ifdef HAVE_LIBSSL
 	if (option_ssl)
 		shutdown_ssl();
 #endif
@@ -495,7 +497,7 @@ int init_listen_socket_fd()
 	BOOL bOptionTrue = TRUE;
 	int results;
 	struct linger solinger;
-#ifdef SSL_SUPPORT
+#ifdef HAVE_LIBSSL
 	if (option_ssl)
 	{
 		if (!init_ssl())
@@ -660,9 +662,6 @@ int init_serial_fd(char * szPortPath)
 # ifdef VSWTC
 	newtio.c_cc[VSWTC] = 0;
 # endif
-# ifdef VSWTCH
-	//newio.c_cc[VSWTCH] = 0;
-# endif
 	newtio.c_cc[VSTART] = 0; /* Ctrl-q */
 	newtio.c_cc[VSTOP] = 0; /* Ctrl-s */
 	newtio.c_cc[VSUSP] = 0; /* Ctrl-z */
@@ -805,7 +804,7 @@ int cleanup_fd(int n)
 			serial_connected = FALSE;
 		}
 
-#ifdef SSL_SUPPORT
+#ifdef HAVE_LIBSSL
 		if (my_fds[n].ssl != NULL)
 			shutdown_ssl_conn(my_fds[n].ssl);
 		my_fds[n].ssl = NULL;
@@ -853,16 +852,16 @@ long get_time_difference(struct timeval *startTime)
 		add_to_all_socket_fds(SERIAL_DISCONNECTED_MSG); \
 		msleep(100); \
 
-/* 
- check for a hup signal and hup work if needed 
+/*
+ check for a hup signal and hup work if needed
  */
-BOOL hup_check() 
+BOOL hup_check()
 {
-	
+
 	/* did we get a hup signal? */
-	if (!got_hup) 
+	if (!got_hup)
 	  return FALSE;
-	
+
 	/* clear it */
 	got_hup = 0;
 
@@ -876,7 +875,7 @@ BOOL hup_check()
 /*
  poll the serial port reconnect if needed
  */
-void poll_serial_port() 
+void poll_serial_port()
 {
 	/* if our port is not connected check if we should try to reconnect */
 	if (!serial_connected)
@@ -900,7 +899,7 @@ void poll_serial_port()
 			msleep(10);
 		return;
 	}
-	
+
 #ifdef USE_TIOCMGET
 	int n,tmp;
 	/* periodic serial device checking */
@@ -926,13 +925,13 @@ void poll_serial_port()
 #endif
 }
 
-/* 
- add all of our fd to our r,w and e fd sets 
+/*
+ add all of our fd to our r,w and e fd sets
 */
 void build_fdsets(fd_set *read_fdset, fd_set *write_fdset, fd_set *except_fdset)
 {
 	int n;
-  
+
 	/* add all sockets to our fdset */
 	FD_ZERO(read_fdset);
 	FD_ZERO(write_fdset);
@@ -948,10 +947,10 @@ void build_fdsets(fd_set *read_fdset, fd_set *write_fdset, fd_set *except_fdset)
 	}
 }
 
-/* 
+/*
  poll any exception fd's return TRUE if we did some work
  */
-BOOL poll_exception_fdset(fd_set *except_fdset) 
+BOOL poll_exception_fdset(fd_set *except_fdset)
 {
 	int n;
 	BOOL did_work = FALSE;
@@ -974,7 +973,7 @@ BOOL poll_exception_fdset(fd_set *except_fdset)
 	return did_work;
 }
 
-/* 
+/*
   poll any read fd's return TRUE if we did do some work
  */
 BOOL poll_read_fdset(fd_set *read_fdset)
@@ -984,8 +983,8 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 	byte_t *tempbuffer;
 	BOOL did_work = FALSE;
 	byte_t buffer[1024];
-	
-#ifdef SSL_SUPPORT
+
+#ifdef HAVE_LIBSSL
 	BIO* newbio = 0;
 #endif
 
@@ -1000,31 +999,31 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 			/* check read fd */
 			if (FD_ISSET(my_fds[n].fd,read_fdset))
 			{
-				/*  if this is a listening socket then we accept on it and 
-				 * get a new client socket 
+				/*  if this is a listening socket then we accept on it and
+				 * get a new client socket
 				 */
 				if (my_fds[n].fd_type == LISTEN_SOCKET)
 				{
 					/* clear our state vars */
 					newsockfd = -1;
-#ifdef SSL_SUPPORT
+#ifdef HAVE_LIBSSL
 					newbio = NULL;
 					if (option_ssl)
 					{
-						if (BIO_do_accept(abio) <= 0) 
+						if (BIO_do_accept(abio) <= 0)
 						{
 							log_message(STREAM_MAIN, MSG_BAD, "SSL BIO_do_accept failed: %s\n",
 								    ERR_error_string(ERR_get_error(), NULL));
-						} else 
+						} else
 						{
 							// try and grab our actual working BIO.
 							newbio = BIO_pop(abio);
-							
-							if (!newbio) 
+
+							if (!newbio)
 							{
 								log_message(STREAM_MAIN, MSG_BAD, "SSL BIO_pop failed: %s\n",
 								    ERR_error_string(ERR_get_error(), NULL));
-							} else 
+							} else
 							{
 								/* get our fd from the BIO */
 								BIO_get_fd(newbio, &newsockfd);
@@ -1042,8 +1041,8 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 						{
 							/* reset our added id to a bad state */
 							added_slot = -2;
-#ifdef SSL_SUPPORT
-							if (option_ssl) 
+#ifdef HAVE_LIBSSL
+							if (option_ssl)
 							{
 								// tell the SSL state machine to start to handshake
 								if (BIO_do_handshake(newbio) <= 0)
@@ -1066,7 +1065,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 							}
 							if (added_slot >= 0)
 							{
-#ifdef SSL_SUPPORT
+#ifdef HAVE_LIBSSL
 								if (option_ssl && newbio != NULL)
 									my_fds[added_slot].ssl = newbio;
 #endif
@@ -1105,7 +1104,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 							}
 							else
 							{
-#ifdef SSL_SUPPORT
+#ifdef HAVE_LIBSSL
 								if (newbio != NULL)
 									shutdown_ssl_conn(newbio);
 #endif
@@ -1116,7 +1115,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 						}
 						else
 						{
-#ifdef SSL_SUPPORT
+#ifdef HAVE_LIBSSL
 							if (newbio != NULL)
 							      shutdown_ssl_conn(newbio);
 #endif
@@ -1173,7 +1172,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 					else
 					{
 						errno = 0;
-#ifdef SSL_SUPPORT
+#ifdef HAVE_LIBSSL
 						if (option_ssl)
 						{
 							received = BIO_read(my_fds[n].ssl, buffer, sizeof(buffer));
@@ -1222,12 +1221,12 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 				}
 			} /* end FD_ISSET() */
 		}
-	}  
-	
+	}
+
 	return did_work;
 }
 
-/* 
+/*
   poll all write fd's return TRUE if we did do some work
  */
 BOOL poll_write_fdset(fd_set *write_fdset)
@@ -1250,7 +1249,7 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 				/* handle writing to CLIENT_SOCKET */
 				if (my_fds[n].fd_type == CLIENT_SOCKET)
 				{
-#ifdef SSL_SUPPORT
+#ifdef HAVE_LIBSSL
 					if (option_ssl)
 					{
 						/* dont try and send till we are ready */
@@ -1329,14 +1328,14 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 					log_message(STREAM_MAIN, MSG_WARN, "\n");
 				}
 
-				/* free up memory */	
+				/* free up memory */
 				if(tempbuffer)
 					free(tempbuffer);
 			}
 			else
 			{
 				/* if serial disconnected and not option_keep_connected
-				   then disconnect the client 
+				   then disconnect the client
 				 */
 				if (!serial_connected && !option_keep_connection)
 				{
@@ -1348,7 +1347,7 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 			}
 		}
 	}
-	
+
 	return did_work;
 }
 
@@ -1361,7 +1360,7 @@ void listen_loop()
 	BOOL did_work=FALSE,reset_state=TRUE;
 	fd_set read_fdset, write_fdset, except_fdset;
 	struct timeval wait;
-	
+
 #ifdef _POSIX_SOURCE
 	// Set high thread priority
 	struct sched_param param;
@@ -1585,7 +1584,7 @@ int parse_args(int argc, char * argv[])
 				case 'c':
 					option_keep_connection = TRUE;
 					break;
-#ifdef SSL_SUPPORT
+#ifdef HAVE_LIBSSL
 				case 'e':
 					option_ssl = TRUE;
 					break;
@@ -1835,7 +1834,7 @@ BOOL read_config(char* filename)
 							option_open_serial_delay = atoi(optdata);
 						}
 
-#ifdef SSL_SUPPORT
+#ifdef HAVE_LIBSSL
 						else if (!strcmp(opt, "encrypted"))
 						{
 							option_ssl = atoi(optdata);
@@ -1996,7 +1995,7 @@ void* fifo_get(fifo *f)
 
 //</Fifo Buffer>
 
-#ifdef SSL_SUPPORT
+#ifdef HAVE_LIBSSL
 /*
  initialize the ssl library
  */
