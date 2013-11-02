@@ -7,7 +7,7 @@
  *
  *  This file may be used under the terms of the GNU General Public
  *  License versions 3.0 as published by the Free Software Foundation 
- *  and appearing in the files LICENSE included in the packaging of this file.
+ *  and appearing in the file COPYING included in the packaging of this project.
  *
  *  This file is provided "AS IS" with NO WARRANTY OF ANY KIND,
  *  INCLUDING THE WARRANTIES OF DESIGN, MERCHANTABILITY AND FITNESS FOR
