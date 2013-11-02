@@ -1,0 +1,14 @@
+This file is here for people to list their contributions to ser2sock. 
+
+When you enhance or fix something, put your name and a description of the 
+what/where/whey/why/how here. If you like, feel free to include an email 
+address. 
+
+Sean Mathews <coder@f34r.com>
+2010 Designed and written based upon non blocking socket select patterns 
+with a single worker loop using FD_SETS to determine what fd need 
+attention. Some simple state management of connections and queues to
+buffer and distribute the data.
+
+Scott Peterson
+2013 Added SSL support
