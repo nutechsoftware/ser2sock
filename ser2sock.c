@@ -6,9 +6,8 @@
  *          Reproduction without permission is prohibited
  *
  *  This file may be used under the terms of the GNU General Public
- *  License versions 2.0 or 3.0 as published by the Free Software
- *  Foundation and appearing in the files LICENSE.GPL2 and LICENSE.GPL3
- *  included in the packaging of this file.
+ *  License versions 3.0 as published by the Free Software Foundation 
+ *  and appearing in the files LICENSE included in the packaging of this file.
  *
  *  This file is provided "AS IS" with NO WARRANTY OF ANY KIND,
  *  INCLUDING THE WARRANTIES OF DESIGN, MERCHANTABILITY AND FITNESS FOR
