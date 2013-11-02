@@ -1,8 +1,12 @@
-This file is here for people to list their contributions to ser2sock. 
-
+ser2sock AUTHORS --- Place for people to list their contributions to ser2sock.
 When you enhance or fix something, put your name and a description of the 
 what/where/whey/why/how here. If you like, feel free to include an email 
 address. 
+
+Copyright (C) 1996-2013 Free Software Foundation, Inc.
+See the end for copying conditions.
+
+Please send ser2sock bug reports to support@nutech.com
 
 Sean Mathews <coder@f34r.com>
 2010 Designed and written based upon non blocking socket select patterns 
@@ -12,3 +16,17 @@ buffer and distribute the data.
 
 Scott Peterson
 2013 Added SSL support
+
+Copyright information:
+
+Copyright (C) 1996, 1997, 1998, 1999, 2000, 2001, 2006 Free Software Foundation, Inc.
+
+   Permission is granted to anyone to make or distribute verbatim copies
+   of this document as received, in any medium, provided that the
+   copyright notice and this permission notice are preserved,
+   thus giving the recipient permission to redistribute in turn.
+
+   Permission is granted to distribute modified versions
+   of this document, or of portions of it,
+   under the above conditions, provided also that they
+   carry prominent notices stating who last changed them.
