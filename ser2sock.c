@@ -6,7 +6,7 @@
  *          Reproduction without permission is prohibited
  *
  *  This file may be used under the terms of the GNU General Public
- *  License versions 3.0 as published by the Free Software Foundation 
+ *  License versions 3.0 as published by the Free Software Foundation
  *  and appearing in the file COPYING included in the packaging of this project.
  *
  *  This file is provided "AS IS" with NO WARRANTY OF ANY KIND,
@@ -18,34 +18,12 @@
  *  PURPOSE: Connect to a given device file such as a serial device and multiplex
  *           all messages from this file to every socket that is connected.
  *
- *
- *  FUNCTIONS: Too many to list
- *
- *  COMMENTS: to build from a shell prompt use cc as follows
- *    user@host:~> cc -o ser2sock ser2sock.c
- *
- *
  *  DEVELOPED BY: Sean Mathews
- *                  http://www.nutech.com/
+ *                http://www.nutech.com/
  *
- *      Thanks to Richard Perlman [ad2usb at perlman.com] for his help testing on
+ *     Thanks to Richard Perlman [ad2usb at perlman.com] for his help testing on
  *     bsd and excellent feedback on features. Also a big thanks to everyone
  *     that helped support the AD2USB project get off the ground.
- *
- *  REV INFO: ver 1.0   05/08/10 Initial release
- *		  1.1   05/18/10 Refining, looking for odd echo bug thanks Richard!
- *		  1.2   05/19/10 Adding daemon mode, bind to ip, debug output
- *			syslog and more
- *		  1.2.4 01/17/11 Fixed a socket bug
- *		  1.2.5 04/01/11 Working on issue on BSD systems
- *		  1.3.0 05/16/11 Reestablishing connection with the serial device
- *		  1.3.1 04/27/12 fixed a few compiler issues with some systems
- *		  1.3.2 08/28/13 improvments in syslog formats
- *		  1.4.0 08/14/13 Added SSL support --SAP
- *		  1.4.1 08/17/13 Add compiler switches cleanup tabification --SM
- *		  1.4.2 09/05/13 Added configuration support. --SAP
- *		  1.4.3 10/24/13 SSL support improvements and some cleanup --SM
- *		  1.4.4 10/25/13 refactor main state machine, logging, cleanup -SM
  *
  \******************************************************************************/
 #define _GNU_SOURCE
@@ -224,7 +202,7 @@ static void writepid(void);
 BOOL init_ssl();
 void shutdown_ssl();
 void shutdown_ssl_conn(BIO* sslbio);
-#ifdef SSL_DEBUGING
+#ifdef SSL_DEBUGGING
 long    tls_bio_dump_cb(BIO *bio, int cmd, const char *argp, int argi,
 			        long unused_argl, long ret);
 void apps_ssl_info_callback(const SSL *s, int where, int ret);
@@ -2052,7 +2030,7 @@ BOOL init_ssl()
 	SSL_set_mode(ssl, SSL_MODE_AUTO_RETRY);
 	BIO_set_nbio(bio, 1);	// Non-blocking on.
 
-#ifdef SSL_DEBUGING
+#ifdef SSL_DEBUGGING
 	/* debug ssl do not use in production just testing */
 	BIO_set_callback(bio,tls_bio_dump_cb);
 	SSL_set_info_callback(ssl, apps_ssl_info_callback);
@@ -2097,12 +2075,12 @@ void shutdown_ssl_conn(BIO* sslbio)
 	BIO_free_all(tmp);
 }
 
-#ifdef SSL_DEBUGING
+#ifdef SSL_DEBUGGING
 /*
  * Every sent & received message this callback function is invoked,
  * so we know when alert messages have arrived or are sent and
  * we can print debug information about TLS handshake. This is
- * debug code and should not be used in production it is not 
+ * debug code and should not be used in production it is not
  * well tested.
  */
 void ssl_msg_callback(int write_p, int version, int content_type,
