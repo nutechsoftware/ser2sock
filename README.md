@@ -56,7 +56,7 @@ Generating the Certificates
 -------------------------
 
 Create the CA certificate and key:
-    openssl req -out ca.pem -new -x509
+````openssl req -out ca.pem -new -x509````
 
 Generate the Server key:
 ```
