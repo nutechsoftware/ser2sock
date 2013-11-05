@@ -56,17 +56,15 @@ Generating the Certificates
 -------------------------
 
 Create the CA certificate and key:
-````openssl req -out ca.pem -new -x509````
+```shell
+openssl req -out ca.pem -new -x509
+```
 
 Generate the Server key:
-```
-openssl genrsa -out server.key 2048
-```
+```openssl genrsa -out server.key 2048```
 
 Generate a signing request for the Server:
-```
-openssl req -key server.key -new -out server.req
-```
+```openssl req -key server.key -new -out server.req```
 
 Sign the server's request:
 ```
@@ -75,19 +73,13 @@ openssl x509 -req -in server.req -CA ca.pem -CAkey privkey.pem -CAserial ca.srl 
 ```
 
 Generate the Client key:
-```
-openssl genrsa -out client.key 2048
-```
+```openssl genrsa -out client.key 2048```
 
 Generate a signing request for the Client:
-```
-openssl req -key client.key -new -out client.req
-```
+```openssl req -key client.key -new -out client.req```
 
 Sign the client's request:
-```
-openssl x509 -req -in client.req -CA ca.pem -CAkey privkey.pem -CAserial ca.srl -out client.pem
-```
+```openssl x509 -req -in client.req -CA ca.pem -CAkey privkey.pem -CAserial ca.srl -out client.pem```
 
 Now all you have to do is enable encryption in the configuration, update your
 certificate paths, and restart the service.
@@ -96,6 +88,4 @@ Testing the SSL Certificates
 ---------------------------
 After the certificates have been generated and ser2sock restarted you can
 verify that the certificates work with OpenSSL:
-```
-openssl s_client -connect 127.0.0.1:10000 -cert client.pem -key client.key -CAfile ca.pem
-```
+```openssl s_client -connect 127.0.0.1:10000 -cert client.pem -key client.key -CAfile ca.pem```
