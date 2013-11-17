@@ -18,13 +18,16 @@ port = 10000
 #encrypted = 1
 
 # CA certificate for this install
-#ca_certificate = /etc/ser2sock/ca.pem
+#ca_certificate = /etc/ser2sock/certs/ca.pem
 
 # SSL certificate
-#ssl_certificate = /etc/ser2sock/server.pem
+#ssl_certificate = /etc/ser2sock/certs/server.pem
 
 # SSL key
-#ssl_key = /etc/ser2sock/server.key
+#ssl_key = /etc/ser2sock/certs/server.key
+
+# SSL CRL location
+#ssl_crl = /etc/ser2sock/ser2sock.crl
 
 # Allow binding only to a specific interface.  Default: 0.0.0.0
 #bind_ip = 127.0.0.1
