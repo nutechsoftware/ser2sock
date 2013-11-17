@@ -73,6 +73,7 @@
 #define SERIAL_DISCONNECTED_MSG	"!SER2SOCK SERIAL_DISCONNECTED\r\n"
 
 #define CONFIG_PATH "/etc/ser2sock/ser2sock.conf"
+#define DEFAULT_CRL_LOCATION "/etc/ser2sock/ser2sock.crl"
 
 #define DAEMON_NAME "ser2sock"
 #define PID_FILE "/var/run/ser2sock.pid"
@@ -247,6 +248,7 @@ BIO* bio = 0, *abio = 0;
 char* option_ca_certificate = NULL;
 char* option_ssl_certificate = NULL;
 char* option_ssl_key = NULL;
+char* option_ssl_crl = DEFAULT_CRL_LOCATION;
 #endif
 /* </Globals> */
 
@@ -1828,6 +1830,10 @@ BOOL read_config(char* filename)
 						{
 							option_ssl_key = strdup(optdata);
 						}
+						else if (!strcmp(opt, "ssl_crl"))
+						{
+							option_ssl_crl = strdup(optdata);
+						}
 #endif
 					}
 				}
@@ -1982,6 +1988,8 @@ BOOL init_ssl()
 	char port_string[256];
 	int use_cert = 0;
 	int use_prv = 0;
+	X509_STORE* store = 0;
+	X509_LOOKUP* lookup = 0;
 
 	// Initialize SSL
 	SSL_load_error_strings();
@@ -2023,6 +2031,15 @@ BOOL init_ssl()
 
 	// Set the verification depth to 1
 	SSL_CTX_set_verify_depth(sslctx, 1);
+
+	// Set up certificate revocation list.
+	store = SSL_CTX_get_cert_store(sslctx);
+	lookup = X509_STORE_add_lookup(store, X509_LOOKUP_file());
+
+	if (X509_load_crl_file(lookup, option_ssl_crl, X509_FILETYPE_PEM))
+	{
+		X509_STORE_set_flags(store, X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL);		
+	}
 
 	// Set everything up to serve.
 	bio = BIO_new_ssl(sslctx, 0);
