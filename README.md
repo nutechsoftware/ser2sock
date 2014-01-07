@@ -7,6 +7,7 @@ network.  It also supports encryption and authentication via OpenSSL.
 
 Installation
 ============
+NOTE: The OpenSSL dev package is needed in order to compile with SSL support.
 
 1. ./configure
 2. make
