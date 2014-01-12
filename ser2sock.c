@@ -1119,7 +1119,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 								{
 									if (option_debug_level > 2)
 									{
-										log_message(STREAM_MAIN, MSG_WARN, "SERIAL>'");
+										log_message(STREAM_MAIN, MSG_WARN, "SERIAL>");
 										for (x = 0; x < received; x++)
 										{
 											log_message(STREAM_MAIN, MSG_WARN, "[%02x]",
