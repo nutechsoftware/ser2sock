@@ -1416,10 +1416,9 @@ void listen_loop()
  */
 void add_to_all_socket_fds(char * message)
 {
-
 	char * tempbuffer;
-	char * location;
 	int n;
+
 	/*
 	 Adding anything to the fifo must be allocated so it can be free'd later
 	 Not very efficient but we have plenty of mem with as few connections as we
@@ -1432,38 +1431,12 @@ void add_to_all_socket_fds(char * message)
 			if (my_fds[n].fd_type == CLIENT_SOCKET)
 			{
 				/* caller of fifo_get must free this */
-				if (line_ended || !my_fds[n].new)
-				{
-					if (my_fds[n].new)
-						my_fds[n].new = FALSE;
-					tempbuffer = strdup(message);
-					fifo_add(&my_fds[n].send_buffer, tempbuffer);
-				}
-				else
-				{
-					/*
-					 wait for our first \n to start on a clean line. We are skipping
-					 our first message so we dont send a partial message
-					 */
-					location = strchr(message, '\n');
-					if (location != NULL)
-					{
-						tempbuffer = strdup(location);
-						fifo_add(&my_fds[n].send_buffer, tempbuffer);
-						my_fds[n].new = FALSE;
-					}
-				}
+				if (my_fds[n].new)
+					my_fds[n].new = FALSE;
+
+				tempbuffer = strdup(message);
+				fifo_add(&my_fds[n].send_buffer, tempbuffer);
 			}
-		}
-	}
-	line_ended = 0;
-	if (message)
-	{
-		location = message + strlen(message) - 1;
-		if (location)
-		{
-			if ((*location) == '\n')
-				line_ended = 1;
 		}
 	}
 }
