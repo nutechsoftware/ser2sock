@@ -71,6 +71,7 @@
 
 #define SERIAL_CONNECTED_MSG	"!SER2SOCK SERIAL_CONNECTED\r\n"
 #define SERIAL_DISCONNECTED_MSG	"!SER2SOCK SERIAL_DISCONNECTED\r\n"
+#define SOCKET_CONNECTED_MSG    "!SER2SOCK Connected\r\n"
 
 #define CONFIG_PATH "/etc/ser2sock/ser2sock.conf"
 
@@ -140,7 +141,6 @@ typedef struct
 typedef struct
 {
 	/* flags */
-	int new;
 	int inuse;
 	int fd_type;
 
@@ -171,7 +171,7 @@ typedef char byte_t;
 int init_system();
 int init_listen_socket_fd();
 int init_serial_fd(char *path);
-void add_to_all_socket_fds(char * message);
+void add_to_all_socket_fds(char  *message);
 void add_to_serial_fd(char * message);
 int cleanup_fd(int n);
 void set_non_blocking(int fd);
@@ -236,7 +236,6 @@ BOOL option_send_terminal_init = FALSE;
 int option_debug_level = 0;
 BOOL option_keep_connection = FALSE;
 int option_open_serial_delay = 5000;
-int line_ended = 0;
 int serial_connected = 0;
 struct timeval tv_serial_start, tv_last_serial_check;
 
@@ -423,7 +422,6 @@ int init_system()
 	for (x = 0; x < MAXCONNECTIONS; x++)
 	{
 		my_fds[x].inuse = FALSE;
-		my_fds[x].new = TRUE;
 		my_fds[x].fd = -1;
 		my_fds[x].fd_type = NA;
 #ifdef HAVE_LIBSSL
@@ -755,7 +753,6 @@ int add_fd(int fd, int fd_type)
 			my_fds[x].inuse = TRUE;
 			my_fds[x].fd_type = fd_type;
 			my_fds[x].fd = fd;
-			my_fds[x].new = TRUE;
 			results = x;
 			break;
 		}
@@ -866,7 +863,6 @@ void poll_serial_port()
 				serial_connected = 1;
 				tv_last_serial_check.tv_sec = 0;
 				tv_last_serial_check.tv_usec = 0;
-				line_ended=0;
 				add_to_all_socket_fds(SERIAL_CONNECTED_MSG);
 			}
 			else
@@ -1065,8 +1061,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 											tempbuffer);
 								}
 
-								tempbuffer = strdup(
-										"!SER2SOCK Connected\r\n");
+								tempbuffer = strdup(SOCKET_CONNECTED_MSG);
 								fifo_add(&my_fds[added_slot].send_buffer,
 										tempbuffer);
 								if (serial_connected)
@@ -1362,7 +1357,6 @@ void listen_loop()
 
 		/* reset state if asked */
 		if (reset_state) {
-			line_ended=0;
 			tv_serial_start.tv_sec = 0;
 			tv_serial_start.tv_usec = 0;
 			tv_last_serial_check.tv_sec = 0;
@@ -1431,9 +1425,6 @@ void add_to_all_socket_fds(char * message)
 			if (my_fds[n].fd_type == CLIENT_SOCKET)
 			{
 				/* caller of fifo_get must free this */
-				if (my_fds[n].new)
-					my_fds[n].new = FALSE;
-
 				tempbuffer = strdup(message);
 				fifo_add(&my_fds[n].send_buffer, tempbuffer);
 			}
