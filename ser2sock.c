@@ -555,7 +555,7 @@ int init_serial_fd(char * szPortPath)
 
 	if (fd < 0)
 	{
-		log_message(STREAM_MAIN, MSG_BAD, "Error can not open com port at %s\n", szPortPath);
+		log_message(STREAM_MAIN, MSG_BAD, "Error can not open com port at %s errno: %i\n", szPortPath, errno);
 		return fd;
 	}
 
