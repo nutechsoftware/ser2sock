@@ -555,7 +555,7 @@ int init_serial_fd(char * szPortPath)
 
 	if (fd < 0)
 	{
-		log_message(STREAM_MAIN, MSG_BAD, "Error can not open com port at %s\n", szPortPath);
+		log_message(STREAM_MAIN, MSG_BAD, "Error can not open com port at %s errno: %i '%s'\n", szPortPath, errno, strerror(errno));
 		return fd;
 	}
 
@@ -891,7 +891,7 @@ void poll_serial_port()
 			{
 				if (ioctl(my_fds[n].fd, TIOCMGET, &tmp) < 0)
 				{
-					log_message(STREAM_MAIN, MSG_WARN, "Serial disconnected on check. errno: %i\n",errno);
+					log_message(STREAM_MAIN, MSG_WARN, "Serial disconnected on check. errno: %i '%s'\n", errno, strerror(errno));
 					clear_serial(n);
 				}
 				/* currently only 1 serial port so we are done */
@@ -1140,8 +1140,8 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 							if (errno != EAGAIN)
 							{
 								log_message(STREAM_MAIN, MSG_WARN,
-										"Serial disconnected on read. errno: %i\n",
-										errno);
+										"Serial disconnected on read. errno: %i '%s'\n",
+										errno, strerror(errno));
 								clear_serial(n);
 							}
 						}
@@ -1163,8 +1163,8 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 						}
 						if (received == 0)
 						{
-							log_message(STREAM_MAIN, MSG_WARN, "Closing socket fd slot %i errno: %i\n",n,
-									errno);
+							log_message(STREAM_MAIN, MSG_WARN, "Closing socket fd slot %i errno: %i '%s'\n", n,
+									errno, strerror(errno));
 							cleanup_fd(n);
 						}
 						else
@@ -1174,8 +1174,8 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 								if (errno == EAGAIN || errno == EINTR)
 									continue;
 								log_message(STREAM_MAIN, MSG_WARN,
-										"Closing socket errno: %i\n",
-										errno);
+										"Closing socket errno: %i '%s'\n",
+										errno, strerror(errno));
 								cleanup_fd(n);
 							}
 							else
@@ -1288,8 +1288,8 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 						if (errno != EAGAIN)
 						{
 							log_message(STREAM_MAIN, MSG_BAD,
-									"Serial disconnected on write. errno: %i\n",
-									errno);
+									"Serial disconnected on write. errno: %i '%s'\n",
+									errno, strerror(errno));
 							clear_serial(n);
 						}
 					}
@@ -1383,7 +1383,7 @@ void listen_loop()
 		n = select(FD_SETSIZE, &read_fdset, &write_fdset, &except_fdset, &wait);
 		if (n == -1)
 		{
-			log_message(STREAM_MAIN, MSG_BAD, "An error occured during select() errno: %i\n",errno);
+			log_message(STREAM_MAIN, MSG_BAD, "An error occured during select() errno: %i '%s'\n", errno, strerror(errno));
 			continue;
 		}
 
