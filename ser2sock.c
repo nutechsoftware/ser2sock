@@ -1522,6 +1522,9 @@ int parse_args(int argc, char * argv[])
 				case 'd':
 					option_daemonize = TRUE;
 					break;
+				case '0':
+					option_binary_mode = TRUE;
+					break;
 				case 't':
 					option_send_terminal_init = TRUE;
 					break;
