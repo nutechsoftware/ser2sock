@@ -1239,9 +1239,9 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 						if(my_fds[n].handshake_done)
 						{
 							/* load our buffer with data to send */
-							tempbuffer = (char *) fifo_get(
+							tempbuffer = (fifo_buffer *) fifo_get(
 									&my_fds[n].send_buffer);
-							written = BIO_write(my_fds[n].ssl, tempbuffer->buffer, tempbuffer->size));
+							written = BIO_write(my_fds[n].ssl, tempbuffer->buffer, tempbuffer->size);
 							if (written <= 0 && BIO_should_retry(my_fds[n].ssl))
 								continue;
 						} else
