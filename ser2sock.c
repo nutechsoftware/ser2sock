@@ -411,8 +411,7 @@ void show_help(const char *appName)
 				"  -i IP                     bind to a specific ip address; default is ALL\n"
 				"  -b baudrate               set baud rate; defaults to 9600\n"
 				"  -d                        daemonize\n"
-				"  -0                        binary mode will not send any status messages and\n"
-				"                            will transmit 0x00 bytes\n"
+				"  -0                        raw device mode no !SER2SOCK info messages\n"
 				"  -t                        send terminal init string\n"
 				"  -g                        debug level 0-3\n"
 				"  -c                        keep incoming connections when a serial device is disconnected\n"
@@ -832,8 +831,10 @@ long get_time_difference(struct timeval *startTime)
 		tv_serial_start.tv_usec = 0; \
 		serial_connected = 0; \
 		cleanup_fd(n); \
-		add_to_all_socket_fds("\r\n", 0); \
-		add_to_all_socket_fds(SERIAL_DISCONNECTED_MSG, 0); \
+		if (!option_binary_mode) { \
+			add_to_all_socket_fds("\r\n", 0); \
+			add_to_all_socket_fds(SERIAL_DISCONNECTED_MSG, 0); \
+		} \
 		msleep(100); \
 
 /*
@@ -873,7 +874,8 @@ void poll_serial_port()
 				serial_connected = 1;
 				tv_last_serial_check.tv_sec = 0;
 				tv_last_serial_check.tv_usec = 0;
-				add_to_all_socket_fds(SERIAL_CONNECTED_MSG, 0);
+				if (!option_binary_mode)
+					add_to_all_socket_fds(SERIAL_CONNECTED_MSG, 0);
 			}
 			else
 				msleep(10);
@@ -1054,7 +1056,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 #endif
 								log_message(STREAM_MAIN, MSG_GOOD, "Socket connected slot %i\n",added_slot);
 								/* adding anything to the fifo must be pre allocated */
-								if (option_send_terminal_init)
+								if (!option_binary_mode && option_send_terminal_init)
 								{
 									tempbuffer = fifo_make_buffer("!", 0);
 									fifo_add(
@@ -1070,18 +1072,19 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 											&my_fds[added_slot].send_buffer,
 											tempbuffer);
 								}
-
-								tempbuffer = fifo_make_buffer(SOCKET_CONNECTED_MSG, 0);
-								fifo_add(&my_fds[added_slot].send_buffer,
-										tempbuffer);
-								if (serial_connected)
-									tempbuffer = fifo_make_buffer(
-											SERIAL_CONNECTED_MSG, 0);
-								else
-									tempbuffer = fifo_make_buffer(
-											SERIAL_DISCONNECTED_MSG, 0);
-								fifo_add(&my_fds[added_slot].send_buffer,
-										tempbuffer);
+								if (!option_binary_mode) {
+									tempbuffer = fifo_make_buffer(SOCKET_CONNECTED_MSG, 0);
+									fifo_add(&my_fds[added_slot].send_buffer,
+											tempbuffer);
+									if (serial_connected)
+										tempbuffer = fifo_make_buffer(
+												SERIAL_CONNECTED_MSG, 0);
+									else
+										tempbuffer = fifo_make_buffer(
+												SERIAL_DISCONNECTED_MSG, 0);
+									fifo_add(&my_fds[added_slot].send_buffer,
+											tempbuffer);
+								}
 								did_work = TRUE;
 							}
 							else
