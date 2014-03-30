@@ -1188,7 +1188,6 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 							else
 							{
 								did_work = TRUE;
-								buffer[received] = 0;
 								add_to_serial_fd(buffer, received);
 								if (option_debug_level > 2)
 								{
@@ -1919,9 +1918,9 @@ void fifo_clear(fifo *f)
 
 /*
  allocate a fifo_buffer and fill it with the supplied in_buffer and len.
- if len is 0 it will be calculated using strlen() so nulls will
- be excluded and thus not true binary. For binary and to include
- nulls len must be > 0.
+ if len is 0 it will be calculated using strlen() so NULL chars in the
+ stream will be excluded and thus not true binary. For binary and to include
+ NULL values in the stream len must be > 0.
  
  note: 
 	this has a specific type where all the other fifo low level routines
