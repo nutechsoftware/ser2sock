@@ -239,7 +239,7 @@ fifo data_buffer;
 char * option_bind_ip = 0;
 char * option_baud_rate = 0;
 BOOL option_daemonize = FALSE;
-BOOL option_binary_mode = FALSE;
+BOOL option_raw_device_mode = FALSE;
 BOOL option_send_terminal_init = FALSE;
 int option_debug_level = 0;
 BOOL option_keep_connection = FALSE;
@@ -831,7 +831,7 @@ long get_time_difference(struct timeval *startTime)
 		tv_serial_start.tv_usec = 0; \
 		serial_connected = 0; \
 		cleanup_fd(n); \
-		if (!option_binary_mode) { \
+		if (!option_raw_device_mode) { \
 			add_to_all_socket_fds("\r\n", 0); \
 			add_to_all_socket_fds(SERIAL_DISCONNECTED_MSG, 0); \
 		} \
@@ -874,7 +874,7 @@ void poll_serial_port()
 				serial_connected = 1;
 				tv_last_serial_check.tv_sec = 0;
 				tv_last_serial_check.tv_usec = 0;
-				if (!option_binary_mode)
+				if (!option_raw_device_mode)
 					add_to_all_socket_fds(SERIAL_CONNECTED_MSG, 0);
 			}
 			else
@@ -1056,7 +1056,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 #endif
 								log_message(STREAM_MAIN, MSG_GOOD, "Socket connected slot %i\n",added_slot);
 								/* adding anything to the fifo must be pre allocated */
-								if (!option_binary_mode && option_send_terminal_init)
+								if (!option_raw_device_mode && option_send_terminal_init)
 								{
 									tempbuffer = fifo_make_buffer("!", 0);
 									fifo_add(
@@ -1072,7 +1072,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 											&my_fds[added_slot].send_buffer,
 											tempbuffer);
 								}
-								if (!option_binary_mode) {
+								if (!option_raw_device_mode) {
 									tempbuffer = fifo_make_buffer(SOCKET_CONNECTED_MSG, 0);
 									fifo_add(&my_fds[added_slot].send_buffer,
 											tempbuffer);
@@ -1523,7 +1523,7 @@ int parse_args(int argc, char * argv[])
 					option_daemonize = TRUE;
 					break;
 				case '0':
-					option_binary_mode = TRUE;
+					option_raw_device_mode = TRUE;
 					break;
 				case 't':
 					option_send_terminal_init = TRUE;
@@ -1776,6 +1776,10 @@ BOOL read_config(char* filename)
 						{
 							option_baud_rate = strdup(optdata);
 						}
+						else if (!strcmp(opt, "raw_device_mode"))
+						{
+							option_raw_device_mode = atoi(optdata);
+						}						
 						else if (!strcmp(opt, "send_terminal_init"))
 						{
 							option_send_terminal_init = atoi(optdata);
