@@ -1354,7 +1354,7 @@ void listen_loop()
 	sched_setscheduler(0,SCHED_RR,&param);
 #endif
 
-	log_message(STREAM_MAIN, MSG_GOOD, "Start wait loop\n");
+	log_message(STREAM_MAIN, MSG_GOOD, "Start wait loop using %s communication mode\n", option_raw_device_mode?"raw":"ser2sock");
 
 	/* continue polling until interrupted */
 	while (!kbhit())
