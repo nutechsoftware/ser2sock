@@ -23,15 +23,17 @@ Usage
 =====
 
 ```
-Usage: ser2sock -p <socket listen port> -s <serial port dev>
+Usage: ./ser2sock -p <socket listen port> -s <serial port dev>
 
   -h, -help                 display this help and exit
+  -f <config path>          override config file path
   -p port                   socket port to listen on
   -s <serial device>        serial device; ex /dev/ttyUSB0
 options
   -i IP                     bind to a specific ip address; default is ALL
   -b baudrate               set baud rate; defaults to 9600
   -d                        daemonize
+  -0                        raw device mode no !SER2SOCK info messages
   -t                        send terminal init string
   -g                        debug level 0-3
   -c                        keep incoming connections when a serial device is disconnected
