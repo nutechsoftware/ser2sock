@@ -71,8 +71,10 @@
 
 #define SERIAL_CONNECTED_MSG	"!SER2SOCK SERIAL_CONNECTED\r\n"
 #define SERIAL_DISCONNECTED_MSG	"!SER2SOCK SERIAL_DISCONNECTED\r\n"
+#define SOCKET_CONNECTED_MSG    "!SER2SOCK Connected\r\n"
 
-#define CONFIG_PATH "/etc/ser2sock/ser2sock.conf"
+#define DEFAULT_CONFIG_PATH "/etc/ser2sock/ser2sock.conf"
+#define DEFAULT_CRL_LOCATION "/etc/ser2sock/ser2sock.crl"
 
 #define DAEMON_NAME "ser2sock"
 #define PID_FILE "/var/run/ser2sock.pid"
@@ -122,6 +124,11 @@ speed_spec speeds[] =
 
 
 /* </Types and Constants> */
+#if defined __FreeBSD__
+typedef unsigned char byte_t;
+#else
+typedef char byte_t;
+#endif
 
 /* <Structures> */
 
@@ -139,8 +146,13 @@ typedef struct
 
 typedef struct
 {
+	int size;
+	byte_t buffer[];
+} fifo_buffer;
+
+typedef struct
+{
 	/* flags */
-	int new;
 	int inuse;
 	int fd_type;
 
@@ -159,11 +171,6 @@ typedef struct
 } FDs;
 
 
-#if defined __FreeBSD__
-typedef unsigned char byte_t;
-#else
-typedef char byte_t;
-#endif
 
 /* </Structures> */
 
@@ -171,8 +178,8 @@ typedef char byte_t;
 int init_system();
 int init_listen_socket_fd();
 int init_serial_fd(char *path);
-void add_to_all_socket_fds(char * message);
-void add_to_serial_fd(char * message);
+void add_to_all_socket_fds(char  *message, unsigned int len);
+void add_to_serial_fd(char * message, unsigned int len);
 int cleanup_fd(int n);
 void set_non_blocking(int fd);
 void print_serial_fd_status(int fd);
@@ -193,6 +200,7 @@ BOOL read_config(char* filename);
 void fifo_init(fifo *f, int size);
 void fifo_destroy(fifo *f);
 int fifo_empty(fifo *f);
+void* fifo_make_buffer(void *in_buffer, unsigned int len);
 int fifo_add(fifo *f, void *next);
 void* fifo_get(fifo *f);
 void fifo_clear(fifo *f);
@@ -229,14 +237,15 @@ struct sockaddr_in serv_addr;
 struct sockaddr_in peer_addr;
 // fifo buffer
 fifo data_buffer;
+char * option_config_path = 0;
 char * option_bind_ip = 0;
 char * option_baud_rate = 0;
 BOOL option_daemonize = FALSE;
+BOOL option_raw_device_mode = FALSE;
 BOOL option_send_terminal_init = FALSE;
 int option_debug_level = 0;
 BOOL option_keep_connection = FALSE;
 int option_open_serial_delay = 5000;
-int line_ended = 0;
 int serial_connected = 0;
 struct timeval tv_serial_start, tv_last_serial_check;
 
@@ -247,6 +256,7 @@ BIO* bio = 0, *abio = 0;
 char* option_ca_certificate = NULL;
 char* option_ssl_certificate = NULL;
 char* option_ssl_key = NULL;
+char* option_ssl_crl = DEFAULT_CRL_LOCATION;
 #endif
 /* </Globals> */
 
@@ -398,12 +408,14 @@ void show_help(const char *appName)
 			stderr,
 			"Usage: %s -p <socket listen port> -s <serial port dev>\n\n"
 				"  -h, -help                 display this help and exit\n"
+				"  -f <config path>          override config file path\n"
 				"  -p port                   socket port to listen on\n"
 				"  -s <serial device>        serial device; ex /dev/ttyUSB0\n"
 				"options\n"
 				"  -i IP                     bind to a specific ip address; default is ALL\n"
 				"  -b baudrate               set baud rate; defaults to 9600\n"
 				"  -d                        daemonize\n"
+				"  -0                        raw device mode no !SER2SOCK info messages\n"
 				"  -t                        send terminal init string\n"
 				"  -g                        debug level 0-3\n"
 				"  -c                        keep incoming connections when a serial device is disconnected\n"
@@ -423,7 +435,6 @@ int init_system()
 	for (x = 0; x < MAXCONNECTIONS; x++)
 	{
 		my_fds[x].inuse = FALSE;
-		my_fds[x].new = TRUE;
 		my_fds[x].fd = -1;
 		my_fds[x].fd_type = NA;
 #ifdef HAVE_LIBSSL
@@ -755,7 +766,6 @@ int add_fd(int fd, int fd_type)
 			my_fds[x].inuse = TRUE;
 			my_fds[x].fd_type = fd_type;
 			my_fds[x].fd = fd;
-			my_fds[x].new = TRUE;
 			results = x;
 			break;
 		}
@@ -825,8 +835,10 @@ long get_time_difference(struct timeval *startTime)
 		tv_serial_start.tv_usec = 0; \
 		serial_connected = 0; \
 		cleanup_fd(n); \
-		add_to_all_socket_fds("\r\n"); \
-		add_to_all_socket_fds(SERIAL_DISCONNECTED_MSG); \
+		if (!option_raw_device_mode) { \
+			add_to_all_socket_fds("\r\n", 0); \
+			add_to_all_socket_fds(SERIAL_DISCONNECTED_MSG, 0); \
+		} \
 		msleep(100); \
 
 /*
@@ -843,7 +855,7 @@ BOOL hup_check()
 	got_hup = 0;
 
 	free_system();
-	read_config(CONFIG_PATH);
+	read_config(option_config_path ? option_config_path : DEFAULT_CONFIG_PATH);
 	init_system();
 	init_listen_socket_fd();
 	return TRUE;
@@ -866,8 +878,8 @@ void poll_serial_port()
 				serial_connected = 1;
 				tv_last_serial_check.tv_sec = 0;
 				tv_last_serial_check.tv_usec = 0;
-				line_ended=0;
-				add_to_all_socket_fds(SERIAL_CONNECTED_MSG);
+				if (!option_raw_device_mode)
+					add_to_all_socket_fds(SERIAL_CONNECTED_MSG, 0);
 			}
 			else
 				msleep(10);
@@ -1048,35 +1060,35 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 #endif
 								log_message(STREAM_MAIN, MSG_GOOD, "Socket connected slot %i\n",added_slot);
 								/* adding anything to the fifo must be pre allocated */
-								if (option_send_terminal_init)
+								if (!option_raw_device_mode && option_send_terminal_init)
 								{
-									tempbuffer = strdup("!");
+									tempbuffer = fifo_make_buffer("!", 0);
 									fifo_add(
 											&my_fds[added_slot].send_buffer,
 											tempbuffer);
-									tempbuffer = strdup(
-											terminal_init_string);
+									tempbuffer = fifo_make_buffer(
+											(void*)terminal_init_string, 0);
 									fifo_add(
 											&my_fds[added_slot].send_buffer,
 											tempbuffer);
-									tempbuffer = strdup("\r\n");
+									tempbuffer = fifo_make_buffer("\r\n", 0);
 									fifo_add(
 											&my_fds[added_slot].send_buffer,
 											tempbuffer);
 								}
-
-								tempbuffer = strdup(
-										"!SER2SOCK Connected\r\n");
-								fifo_add(&my_fds[added_slot].send_buffer,
-										tempbuffer);
-								if (serial_connected)
-									tempbuffer = strdup(
-											SERIAL_CONNECTED_MSG);
-								else
-									tempbuffer = strdup(
-											SERIAL_DISCONNECTED_MSG);
-								fifo_add(&my_fds[added_slot].send_buffer,
-										tempbuffer);
+								if (!option_raw_device_mode) {
+									tempbuffer = fifo_make_buffer(SOCKET_CONNECTED_MSG, 0);
+									fifo_add(&my_fds[added_slot].send_buffer,
+											tempbuffer);
+									if (serial_connected)
+										tempbuffer = fifo_make_buffer(
+												SERIAL_CONNECTED_MSG, 0);
+									else
+										tempbuffer = fifo_make_buffer(
+												SERIAL_DISCONNECTED_MSG, 0);
+									fifo_add(&my_fds[added_slot].send_buffer,
+											tempbuffer);
+								}
 								did_work = TRUE;
 							}
 							else
@@ -1113,8 +1125,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 							if (received > 0)
 							{
 								did_work = TRUE;
-								buffer[received] = 0;
-								add_to_all_socket_fds(buffer);
+								add_to_all_socket_fds(buffer, received);
 								if (option_debug_level > 1)
 								{
 									if (option_debug_level > 2)
@@ -1181,12 +1192,11 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 							else
 							{
 								did_work = TRUE;
-								buffer[received] = 0;
-								add_to_serial_fd(buffer);
+								add_to_serial_fd(buffer, received);
 								if (option_debug_level > 2)
 								{
 									log_message(STREAM_MAIN, MSG_WARN, "SOCKET[%i]>", n);
-									for (x = 0; x < strlen(buffer); x++)
+									for (x = 0; x < received; x++)
 									{
 										log_message(STREAM_MAIN, MSG_WARN, "[%02x]", buffer[x]);
 									}
@@ -1209,7 +1219,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 BOOL poll_write_fdset(fd_set *write_fdset)
 {
 	int x, n, written;
-	byte_t *tempbuffer;
+	fifo_buffer* tempbuffer;
 	BOOL did_work = FALSE;
 
 	/* check every socket to find the one that needs write */
@@ -1233,9 +1243,9 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 						if(my_fds[n].handshake_done)
 						{
 							/* load our buffer with data to send */
-							tempbuffer = (char *) fifo_get(
+							tempbuffer = (fifo_buffer *) fifo_get(
 									&my_fds[n].send_buffer);
-							written = BIO_write(my_fds[n].ssl, tempbuffer, strlen(tempbuffer));
+							written = BIO_write(my_fds[n].ssl, tempbuffer->buffer, tempbuffer->size);
 							if (written <= 0 && BIO_should_retry(my_fds[n].ssl))
 								continue;
 						} else
@@ -1258,9 +1268,9 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 #endif
 					/* load our buffer with data to send */
 					{
-						tempbuffer = (char *) fifo_get(
+						tempbuffer = (fifo_buffer *) fifo_get(
 								&my_fds[n].send_buffer);
-						send(my_fds[n].fd, tempbuffer, strlen(tempbuffer), 0);
+						send(my_fds[n].fd, tempbuffer->buffer, tempbuffer->size, 0);
 					}
 
 					/* did we do any work? */
@@ -1276,14 +1286,13 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 				if (my_fds[n].fd_type == SERIAL)
 				{
 					/* load our buffer with data to send */
-					tempbuffer = (char *) fifo_get(
+					tempbuffer = (fifo_buffer *) fifo_get(
 							&my_fds[n].send_buffer);
 					errno = 0;
 					did_work = TRUE;
 					if (option_debug_level > 2)
 						log_message(STREAM_MAIN, MSG_WARN, "SERIAL[%i]<", n);
-					if (write(my_fds[n].fd, tempbuffer, strlen(
-							tempbuffer)) < 0)
+					if (write(my_fds[n].fd, tempbuffer->buffer, tempbuffer->size) < 0)
 					{
 						if (errno != EAGAIN)
 						{
@@ -1298,9 +1307,9 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 				/* logging if needed */
 				if (option_debug_level > 2 && tempbuffer)
 				{
-					for (x = 0; x < strlen(tempbuffer); x++)
+					for (x = 0; x < tempbuffer->size; x++)
 					{
-						log_message(STREAM_MAIN, MSG_WARN, "[%02x]", tempbuffer[x]);
+						log_message(STREAM_MAIN, MSG_WARN, "[%02x]", tempbuffer->buffer[x]);
 					}
 					log_message(STREAM_MAIN, MSG_WARN, "\n");
 				}
@@ -1348,7 +1357,7 @@ void listen_loop()
 	sched_setscheduler(0,SCHED_RR,&param);
 #endif
 
-	log_message(STREAM_MAIN, MSG_GOOD, "Start wait loop\n");
+	log_message(STREAM_MAIN, MSG_GOOD, "Start wait loop using %s communication mode\n", option_raw_device_mode?"raw":"ser2sock");
 
 	/* continue polling until interrupted */
 	while (!kbhit())
@@ -1362,7 +1371,6 @@ void listen_loop()
 
 		/* reset state if asked */
 		if (reset_state) {
-			line_ended=0;
 			tv_serial_start.tv_sec = 0;
 			tv_serial_start.tv_usec = 0;
 			tv_last_serial_check.tv_sec = 0;
@@ -1412,11 +1420,11 @@ void listen_loop()
 
 /*
  add_to_all_socket_fds
- adds a buffer to ever connected socket fd ie multiplexes
+ adds a buffer to every connected socket fd ie multiplexes
  */
-void add_to_all_socket_fds(char * message)
+void add_to_all_socket_fds(char * message, unsigned int len)
 {
-	char * tempbuffer;
+	void * tempbuffer;
 	int n;
 
 	/*
@@ -1431,10 +1439,7 @@ void add_to_all_socket_fds(char * message)
 			if (my_fds[n].fd_type == CLIENT_SOCKET)
 			{
 				/* caller of fifo_get must free this */
-				if (my_fds[n].new)
-					my_fds[n].new = FALSE;
-
-				tempbuffer = strdup(message);
+				tempbuffer = fifo_make_buffer(message,len);
 				fifo_add(&my_fds[n].send_buffer, tempbuffer);
 			}
 		}
@@ -1444,17 +1449,17 @@ void add_to_all_socket_fds(char * message)
 /*
  adds data to the serial fifo buffer should be at 0 ever time
  */
-void add_to_serial_fd(char *message)
+void add_to_serial_fd(char *message, unsigned int len)
 {
 	int n;
-	char * tempbuffer;
+	void * tempbuffer;
 	for (n = 0; n < MAXCONNECTIONS; n++)
 	{
 		if (my_fds[n].inuse == TRUE)
 		{
 			if (my_fds[n].fd_type == SERIAL)
 			{
-				tempbuffer = strdup(message);
+				tempbuffer = fifo_make_buffer(message, len);
 				fifo_add(&my_fds[n].send_buffer, tempbuffer);
 				break;
 			}
@@ -1520,6 +1525,9 @@ int parse_args(int argc, char * argv[])
 				case 'd':
 					option_daemonize = TRUE;
 					break;
+				case '0':
+					option_raw_device_mode = TRUE;
+					break;
 				case 't':
 					option_send_terminal_init = TRUE;
 					break;
@@ -1533,6 +1541,10 @@ int parse_args(int argc, char * argv[])
 					break;
 				case 'c':
 					option_keep_connection = TRUE;
+					break;
+				case 'f':
+					skip = skip_param(&loc_argv[1][0]);
+					option_config_path = &loc_argv[1][skip];
 					break;
 #ifdef HAVE_LIBSSL
 				case 'e':
@@ -1583,14 +1595,16 @@ static void writepid(void)
  */
 int main(int argc, char *argv[])
 {
-	BOOL config_read = read_config(CONFIG_PATH);
+	BOOL config_read = read_config(DEFAULT_CONFIG_PATH);
 
 	/* parse args and set global vars as needed */
 	parse_args(argc, argv);
 
-	if(config_read)
-		log_message(STREAM_MAIN, MSG_GOOD, "Using config file: %s\n", CONFIG_PATH);
+	if (option_config_path != NULL)
+		config_read = read_config(option_config_path);
 
+	if (config_read)
+		log_message(STREAM_MAIN, MSG_GOOD, "Using config file: %s\n", option_config_path ? option_config_path : DEFAULT_CONFIG_PATH);
 
 	/* startup banner and args check */
 	log_message(STREAM_MAIN, MSG_GOOD, "Serial 2 Socket Relay version %s starting\n", SER2SOCK_VERSION);
@@ -1771,6 +1785,10 @@ BOOL read_config(char* filename)
 						{
 							option_baud_rate = strdup(optdata);
 						}
+						else if (!strcmp(opt, "raw_device_mode"))
+						{
+							option_raw_device_mode = atoi(optdata);
+						}						
 						else if (!strcmp(opt, "send_terminal_init"))
 						{
 							option_send_terminal_init = atoi(optdata);
@@ -1800,6 +1818,10 @@ BOOL read_config(char* filename)
 						else if (!strcmp(opt, "ssl_key"))
 						{
 							option_ssl_key = strdup(optdata);
+						}
+						else if (!strcmp(opt, "ssl_crl"))
+						{
+							option_ssl_crl = strdup(optdata);
 						}
 #endif
 					}
@@ -1909,6 +1931,30 @@ void fifo_clear(fifo *f)
 }
 
 /*
+ allocate a fifo_buffer and fill it with the supplied in_buffer and len.
+ if len is 0 it will be calculated using strlen() so NULL chars in the
+ stream will be excluded and thus not true binary. For binary and to include
+ NULL values in the stream len must be > 0.
+ 
+ note: 
+	this has a specific type where all the other fifo low level routines
+	are all void *.
+ */
+void* fifo_make_buffer(void *in_buffer, unsigned int len)
+{
+	fifo_buffer* out_buffer;
+	
+	// Calcualte the buffer size as a string not including the null terminator
+	if (!len) {
+		len = strlen(in_buffer);
+	}
+	out_buffer = (fifo_buffer *)malloc(sizeof(out_buffer->size)+len);
+	memcpy(out_buffer->buffer, in_buffer, len);
+	out_buffer->size = len;
+	return (void*) out_buffer;
+}
+
+/*
  insert an element
  this must be already allocated with malloc or strdup
  */
@@ -1955,6 +2001,8 @@ BOOL init_ssl()
 	char port_string[256];
 	int use_cert = 0;
 	int use_prv = 0;
+	X509_STORE* store = 0;
+	X509_LOOKUP* lookup = 0;
 
 	// Initialize SSL
 	SSL_load_error_strings();
@@ -1996,6 +2044,15 @@ BOOL init_ssl()
 
 	// Set the verification depth to 1
 	SSL_CTX_set_verify_depth(sslctx, 1);
+
+	// Set up certificate revocation list.
+	store = SSL_CTX_get_cert_store(sslctx);
+	lookup = X509_STORE_add_lookup(store, X509_LOOKUP_file());
+
+	if (X509_load_crl_file(lookup, option_ssl_crl, X509_FILETYPE_PEM))
+	{
+		X509_STORE_set_flags(store, X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL);		
+	}
 
 	// Set everything up to serve.
 	bio = BIO_new_ssl(sslctx, 0);
