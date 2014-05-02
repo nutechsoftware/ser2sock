@@ -71,6 +71,7 @@
 
 #define SERIAL_CONNECTED_MSG	"!SER2SOCK SERIAL_CONNECTED\r\n"
 #define SERIAL_DISCONNECTED_MSG	"!SER2SOCK SERIAL_DISCONNECTED\r\n"
+#define SOCKET_CONNECTED_MSG    "!SER2SOCK Connected\r\n"
 
 #define CONFIG_PATH "/etc/ser2sock/ser2sock.conf"
 #define DEFAULT_CRL_LOCATION "/etc/ser2sock/ser2sock.crl"
@@ -123,6 +124,11 @@ speed_spec speeds[] =
 
 
 /* </Types and Constants> */
+#if defined __FreeBSD__
+typedef unsigned char byte_t;
+#else
+typedef char byte_t;
+#endif
 
 /* <Structures> */
 
@@ -140,8 +146,13 @@ typedef struct
 
 typedef struct
 {
+	int size;
+	byte_t buffer[];
+} fifo_buffer;
+
+typedef struct
+{
 	/* flags */
-	int new;
 	int inuse;
 	int fd_type;
 
@@ -160,11 +171,6 @@ typedef struct
 } FDs;
 
 
-#if defined __FreeBSD__
-typedef unsigned char byte_t;
-#else
-typedef char byte_t;
-#endif
 
 /* </Structures> */
 
@@ -172,8 +178,8 @@ typedef char byte_t;
 int init_system();
 int init_listen_socket_fd();
 int init_serial_fd(char *path);
-void add_to_all_socket_fds(char * message);
-void add_to_serial_fd(char * message);
+void add_to_all_socket_fds(char  *message, unsigned int len);
+void add_to_serial_fd(char * message, unsigned int len);
 int cleanup_fd(int n);
 void set_non_blocking(int fd);
 void print_serial_fd_status(int fd);
@@ -194,6 +200,7 @@ BOOL read_config(char* filename);
 void fifo_init(fifo *f, int size);
 void fifo_destroy(fifo *f);
 int fifo_empty(fifo *f);
+void* fifo_make_buffer(void *in_buffer, unsigned int len);
 int fifo_add(fifo *f, void *next);
 void* fifo_get(fifo *f);
 void fifo_clear(fifo *f);
@@ -233,11 +240,11 @@ fifo data_buffer;
 char * option_bind_ip = 0;
 char * option_baud_rate = 0;
 BOOL option_daemonize = FALSE;
+BOOL option_raw_device_mode = FALSE;
 BOOL option_send_terminal_init = FALSE;
 int option_debug_level = 0;
 BOOL option_keep_connection = FALSE;
 int option_open_serial_delay = 5000;
-int line_ended = 0;
 int serial_connected = 0;
 struct timeval tv_serial_start, tv_last_serial_check;
 
@@ -406,6 +413,7 @@ void show_help(const char *appName)
 				"  -i IP                     bind to a specific ip address; default is ALL\n"
 				"  -b baudrate               set baud rate; defaults to 9600\n"
 				"  -d                        daemonize\n"
+				"  -0                        raw device mode no !SER2SOCK info messages\n"
 				"  -t                        send terminal init string\n"
 				"  -g                        debug level 0-3\n"
 				"  -c                        keep incoming connections when a serial device is disconnected\n"
@@ -425,7 +433,6 @@ int init_system()
 	for (x = 0; x < MAXCONNECTIONS; x++)
 	{
 		my_fds[x].inuse = FALSE;
-		my_fds[x].new = TRUE;
 		my_fds[x].fd = -1;
 		my_fds[x].fd_type = NA;
 #ifdef HAVE_LIBSSL
@@ -557,7 +564,7 @@ int init_serial_fd(char * szPortPath)
 
 	if (fd < 0)
 	{
-		log_message(STREAM_MAIN, MSG_BAD, "Error can not open com port at %s\n", szPortPath);
+		log_message(STREAM_MAIN, MSG_BAD, "Error can not open com port at %s errno: %i '%s'\n", szPortPath, errno, strerror(errno));
 		return fd;
 	}
 
@@ -757,7 +764,6 @@ int add_fd(int fd, int fd_type)
 			my_fds[x].inuse = TRUE;
 			my_fds[x].fd_type = fd_type;
 			my_fds[x].fd = fd;
-			my_fds[x].new = TRUE;
 			results = x;
 			break;
 		}
@@ -827,8 +833,10 @@ long get_time_difference(struct timeval *startTime)
 		tv_serial_start.tv_usec = 0; \
 		serial_connected = 0; \
 		cleanup_fd(n); \
-		add_to_all_socket_fds("\r\n"); \
-		add_to_all_socket_fds(SERIAL_DISCONNECTED_MSG); \
+		if (!option_raw_device_mode) { \
+			add_to_all_socket_fds("\r\n", 0); \
+			add_to_all_socket_fds(SERIAL_DISCONNECTED_MSG, 0); \
+		} \
 		msleep(100); \
 
 /*
@@ -868,8 +876,8 @@ void poll_serial_port()
 				serial_connected = 1;
 				tv_last_serial_check.tv_sec = 0;
 				tv_last_serial_check.tv_usec = 0;
-				line_ended=0;
-				add_to_all_socket_fds(SERIAL_CONNECTED_MSG);
+				if (!option_raw_device_mode)
+					add_to_all_socket_fds(SERIAL_CONNECTED_MSG, 0);
 			}
 			else
 				msleep(10);
@@ -893,7 +901,7 @@ void poll_serial_port()
 			{
 				if (ioctl(my_fds[n].fd, TIOCMGET, &tmp) < 0)
 				{
-					log_message(STREAM_MAIN, MSG_WARN, "Serial disconnected on check. errno: %i\n",errno);
+					log_message(STREAM_MAIN, MSG_WARN, "Serial disconnected on check. errno: %i '%s'\n", errno, strerror(errno));
 					clear_serial(n);
 				}
 				/* currently only 1 serial port so we are done */
@@ -1050,35 +1058,35 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 #endif
 								log_message(STREAM_MAIN, MSG_GOOD, "Socket connected slot %i\n",added_slot);
 								/* adding anything to the fifo must be pre allocated */
-								if (option_send_terminal_init)
+								if (!option_raw_device_mode && option_send_terminal_init)
 								{
-									tempbuffer = strdup("!");
+									tempbuffer = fifo_make_buffer("!", 0);
 									fifo_add(
 											&my_fds[added_slot].send_buffer,
 											tempbuffer);
-									tempbuffer = strdup(
-											terminal_init_string);
+									tempbuffer = fifo_make_buffer(
+											(void*)terminal_init_string, 0);
 									fifo_add(
 											&my_fds[added_slot].send_buffer,
 											tempbuffer);
-									tempbuffer = strdup("\r\n");
+									tempbuffer = fifo_make_buffer("\r\n", 0);
 									fifo_add(
 											&my_fds[added_slot].send_buffer,
 											tempbuffer);
 								}
-
-								tempbuffer = strdup(
-										"!SER2SOCK Connected\r\n");
-								fifo_add(&my_fds[added_slot].send_buffer,
-										tempbuffer);
-								if (serial_connected)
-									tempbuffer = strdup(
-											SERIAL_CONNECTED_MSG);
-								else
-									tempbuffer = strdup(
-											SERIAL_DISCONNECTED_MSG);
-								fifo_add(&my_fds[added_slot].send_buffer,
-										tempbuffer);
+								if (!option_raw_device_mode) {
+									tempbuffer = fifo_make_buffer(SOCKET_CONNECTED_MSG, 0);
+									fifo_add(&my_fds[added_slot].send_buffer,
+											tempbuffer);
+									if (serial_connected)
+										tempbuffer = fifo_make_buffer(
+												SERIAL_CONNECTED_MSG, 0);
+									else
+										tempbuffer = fifo_make_buffer(
+												SERIAL_DISCONNECTED_MSG, 0);
+									fifo_add(&my_fds[added_slot].send_buffer,
+											tempbuffer);
+								}
 								did_work = TRUE;
 							}
 							else
@@ -1115,13 +1123,12 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 							if (received > 0)
 							{
 								did_work = TRUE;
-								buffer[received] = 0;
-								add_to_all_socket_fds(buffer);
+								add_to_all_socket_fds(buffer, received);
 								if (option_debug_level > 1)
 								{
 									if (option_debug_level > 2)
 									{
-										log_message(STREAM_MAIN, MSG_WARN, "SERIAL>'");
+										log_message(STREAM_MAIN, MSG_WARN, "SERIAL>");
 										for (x = 0; x < received; x++)
 										{
 											log_message(STREAM_MAIN, MSG_WARN, "[%02x]",
@@ -1142,8 +1149,8 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 							if (errno != EAGAIN)
 							{
 								log_message(STREAM_MAIN, MSG_WARN,
-										"Serial disconnected on read. errno: %i\n",
-										errno);
+										"Serial disconnected on read. errno: %i '%s'\n",
+										errno, strerror(errno));
 								clear_serial(n);
 							}
 						}
@@ -1165,8 +1172,8 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 						}
 						if (received == 0)
 						{
-							log_message(STREAM_MAIN, MSG_WARN, "Closing socket fd slot %i errno: %i\n",n,
-									errno);
+							log_message(STREAM_MAIN, MSG_WARN, "Closing socket fd slot %i errno: %i '%s'\n", n,
+									errno, strerror(errno));
 							cleanup_fd(n);
 						}
 						else
@@ -1176,19 +1183,18 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 								if (errno == EAGAIN || errno == EINTR)
 									continue;
 								log_message(STREAM_MAIN, MSG_WARN,
-										"Closing socket errno: %i\n",
-										errno);
+										"Closing socket errno: %i '%s'\n",
+										errno, strerror(errno));
 								cleanup_fd(n);
 							}
 							else
 							{
 								did_work = TRUE;
-								buffer[received] = 0;
-								add_to_serial_fd(buffer);
+								add_to_serial_fd(buffer, received);
 								if (option_debug_level > 2)
 								{
 									log_message(STREAM_MAIN, MSG_WARN, "SOCKET[%i]>", n);
-									for (x = 0; x < strlen(buffer); x++)
+									for (x = 0; x < received; x++)
 									{
 										log_message(STREAM_MAIN, MSG_WARN, "[%02x]", buffer[x]);
 									}
@@ -1211,7 +1217,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 BOOL poll_write_fdset(fd_set *write_fdset)
 {
 	int x, n, written;
-	byte_t *tempbuffer;
+	fifo_buffer* tempbuffer;
 	BOOL did_work = FALSE;
 
 	/* check every socket to find the one that needs write */
@@ -1235,9 +1241,9 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 						if(my_fds[n].handshake_done)
 						{
 							/* load our buffer with data to send */
-							tempbuffer = (char *) fifo_get(
+							tempbuffer = (fifo_buffer *) fifo_get(
 									&my_fds[n].send_buffer);
-							written = BIO_write(my_fds[n].ssl, tempbuffer, strlen(tempbuffer));
+							written = BIO_write(my_fds[n].ssl, tempbuffer->buffer, tempbuffer->size);
 							if (written <= 0 && BIO_should_retry(my_fds[n].ssl))
 								continue;
 						} else
@@ -1260,9 +1266,9 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 #endif
 					/* load our buffer with data to send */
 					{
-						tempbuffer = (char *) fifo_get(
+						tempbuffer = (fifo_buffer *) fifo_get(
 								&my_fds[n].send_buffer);
-						send(my_fds[n].fd, tempbuffer, strlen(tempbuffer), 0);
+						send(my_fds[n].fd, tempbuffer->buffer, tempbuffer->size, 0);
 					}
 
 					/* did we do any work? */
@@ -1278,20 +1284,19 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 				if (my_fds[n].fd_type == SERIAL)
 				{
 					/* load our buffer with data to send */
-					tempbuffer = (char *) fifo_get(
+					tempbuffer = (fifo_buffer *) fifo_get(
 							&my_fds[n].send_buffer);
 					errno = 0;
 					did_work = TRUE;
 					if (option_debug_level > 2)
 						log_message(STREAM_MAIN, MSG_WARN, "SERIAL[%i]<", n);
-					if (write(my_fds[n].fd, tempbuffer, strlen(
-							tempbuffer)) < 0)
+					if (write(my_fds[n].fd, tempbuffer->buffer, tempbuffer->size) < 0)
 					{
 						if (errno != EAGAIN)
 						{
 							log_message(STREAM_MAIN, MSG_BAD,
-									"Serial disconnected on write. errno: %i\n",
-									errno);
+									"Serial disconnected on write. errno: %i '%s'\n",
+									errno, strerror(errno));
 							clear_serial(n);
 						}
 					}
@@ -1300,9 +1305,9 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 				/* logging if needed */
 				if (option_debug_level > 2 && tempbuffer)
 				{
-					for (x = 0; x < strlen(tempbuffer); x++)
+					for (x = 0; x < tempbuffer->size; x++)
 					{
-						log_message(STREAM_MAIN, MSG_WARN, "[%02x]", tempbuffer[x]);
+						log_message(STREAM_MAIN, MSG_WARN, "[%02x]", tempbuffer->buffer[x]);
 					}
 					log_message(STREAM_MAIN, MSG_WARN, "\n");
 				}
@@ -1350,7 +1355,7 @@ void listen_loop()
 	sched_setscheduler(0,SCHED_RR,&param);
 #endif
 
-	log_message(STREAM_MAIN, MSG_GOOD, "Start wait loop\n");
+	log_message(STREAM_MAIN, MSG_GOOD, "Start wait loop using %s communication mode\n", option_raw_device_mode?"raw":"ser2sock");
 
 	/* continue polling until interrupted */
 	while (!kbhit())
@@ -1364,7 +1369,6 @@ void listen_loop()
 
 		/* reset state if asked */
 		if (reset_state) {
-			line_ended=0;
 			tv_serial_start.tv_sec = 0;
 			tv_serial_start.tv_usec = 0;
 			tv_last_serial_check.tv_sec = 0;
@@ -1385,7 +1389,7 @@ void listen_loop()
 		n = select(FD_SETSIZE, &read_fdset, &write_fdset, &except_fdset, &wait);
 		if (n == -1)
 		{
-			log_message(STREAM_MAIN, MSG_BAD, "An error occured during select() errno: %i\n",errno);
+			log_message(STREAM_MAIN, MSG_BAD, "An error occured during select() errno: %i '%s'\n", errno, strerror(errno));
 			continue;
 		}
 
@@ -1414,14 +1418,13 @@ void listen_loop()
 
 /*
  add_to_all_socket_fds
- adds a buffer to ever connected socket fd ie multiplexes
+ adds a buffer to every connected socket fd ie multiplexes
  */
-void add_to_all_socket_fds(char * message)
+void add_to_all_socket_fds(char * message, unsigned int len)
 {
-
-	char * tempbuffer;
-	char * location;
+	void * tempbuffer;
 	int n;
+
 	/*
 	 Adding anything to the fifo must be allocated so it can be free'd later
 	 Not very efficient but we have plenty of mem with as few connections as we
@@ -1434,38 +1437,9 @@ void add_to_all_socket_fds(char * message)
 			if (my_fds[n].fd_type == CLIENT_SOCKET)
 			{
 				/* caller of fifo_get must free this */
-				if (line_ended || !my_fds[n].new)
-				{
-					if (my_fds[n].new)
-						my_fds[n].new = FALSE;
-					tempbuffer = strdup(message);
-					fifo_add(&my_fds[n].send_buffer, tempbuffer);
-				}
-				else
-				{
-					/*
-					 wait for our first \n to start on a clean line. We are skipping
-					 our first message so we dont send a partial message
-					 */
-					location = strchr(message, '\n');
-					if (location != NULL)
-					{
-						tempbuffer = strdup(location);
-						fifo_add(&my_fds[n].send_buffer, tempbuffer);
-						my_fds[n].new = FALSE;
-					}
-				}
+				tempbuffer = fifo_make_buffer(message,len);
+				fifo_add(&my_fds[n].send_buffer, tempbuffer);
 			}
-		}
-	}
-	line_ended = 0;
-	if (message)
-	{
-		location = message + strlen(message) - 1;
-		if (location)
-		{
-			if ((*location) == '\n')
-				line_ended = 1;
 		}
 	}
 }
@@ -1473,17 +1447,17 @@ void add_to_all_socket_fds(char * message)
 /*
  adds data to the serial fifo buffer should be at 0 ever time
  */
-void add_to_serial_fd(char *message)
+void add_to_serial_fd(char *message, unsigned int len)
 {
 	int n;
-	char * tempbuffer;
+	void * tempbuffer;
 	for (n = 0; n < MAXCONNECTIONS; n++)
 	{
 		if (my_fds[n].inuse == TRUE)
 		{
 			if (my_fds[n].fd_type == SERIAL)
 			{
-				tempbuffer = strdup(message);
+				tempbuffer = fifo_make_buffer(message, len);
 				fifo_add(&my_fds[n].send_buffer, tempbuffer);
 				break;
 			}
@@ -1548,6 +1522,9 @@ int parse_args(int argc, char * argv[])
 					break;
 				case 'd':
 					option_daemonize = TRUE;
+					break;
+				case '0':
+					option_raw_device_mode = TRUE;
 					break;
 				case 't':
 					option_send_terminal_init = TRUE;
@@ -1800,6 +1777,10 @@ BOOL read_config(char* filename)
 						{
 							option_baud_rate = strdup(optdata);
 						}
+						else if (!strcmp(opt, "raw_device_mode"))
+						{
+							option_raw_device_mode = atoi(optdata);
+						}						
 						else if (!strcmp(opt, "send_terminal_init"))
 						{
 							option_send_terminal_init = atoi(optdata);
@@ -1939,6 +1920,30 @@ void fifo_clear(fifo *f)
 	}
 	if (option_debug_level > 2)
 		log_message(STREAM_MAIN, MSG_GOOD, " done.\n");
+}
+
+/*
+ allocate a fifo_buffer and fill it with the supplied in_buffer and len.
+ if len is 0 it will be calculated using strlen() so NULL chars in the
+ stream will be excluded and thus not true binary. For binary and to include
+ NULL values in the stream len must be > 0.
+ 
+ note: 
+	this has a specific type where all the other fifo low level routines
+	are all void *.
+ */
+void* fifo_make_buffer(void *in_buffer, unsigned int len)
+{
+	fifo_buffer* out_buffer;
+	
+	// Calcualte the buffer size as a string not including the null terminator
+	if (!len) {
+		len = strlen(in_buffer);
+	}
+	out_buffer = (fifo_buffer *)malloc(sizeof(out_buffer->size)+len);
+	memcpy(out_buffer->buffer, in_buffer, len);
+	out_buffer->size = len;
+	return (void*) out_buffer;
 }
 
 /*
