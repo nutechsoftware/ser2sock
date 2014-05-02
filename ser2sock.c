@@ -73,7 +73,7 @@
 #define SERIAL_DISCONNECTED_MSG	"!SER2SOCK SERIAL_DISCONNECTED\r\n"
 #define SOCKET_CONNECTED_MSG    "!SER2SOCK Connected\r\n"
 
-#define CONFIG_PATH "/etc/ser2sock/ser2sock.conf"
+#define DEFAULT_CONFIG_PATH "/etc/ser2sock/ser2sock.conf"
 #define DEFAULT_CRL_LOCATION "/etc/ser2sock/ser2sock.crl"
 
 #define DAEMON_NAME "ser2sock"
@@ -237,6 +237,7 @@ struct sockaddr_in serv_addr;
 struct sockaddr_in peer_addr;
 // fifo buffer
 fifo data_buffer;
+char * option_config_path = 0;
 char * option_bind_ip = 0;
 char * option_baud_rate = 0;
 BOOL option_daemonize = FALSE;
@@ -407,6 +408,7 @@ void show_help(const char *appName)
 			stderr,
 			"Usage: %s -p <socket listen port> -s <serial port dev>\n\n"
 				"  -h, -help                 display this help and exit\n"
+				"  -f <config path>          override config file path\n"
 				"  -p port                   socket port to listen on\n"
 				"  -s <serial device>        serial device; ex /dev/ttyUSB0\n"
 				"options\n"
@@ -853,7 +855,7 @@ BOOL hup_check()
 	got_hup = 0;
 
 	free_system();
-	read_config(CONFIG_PATH);
+	read_config(option_config_path ? option_config_path : DEFAULT_CONFIG_PATH);
 	init_system();
 	init_listen_socket_fd();
 	return TRUE;
@@ -1540,6 +1542,10 @@ int parse_args(int argc, char * argv[])
 				case 'c':
 					option_keep_connection = TRUE;
 					break;
+				case 'f':
+					skip = skip_param(&loc_argv[1][0]);
+					option_config_path = &loc_argv[1][skip];
+					break;
 #ifdef HAVE_LIBSSL
 				case 'e':
 					option_ssl = TRUE;
@@ -1589,14 +1595,16 @@ static void writepid(void)
  */
 int main(int argc, char *argv[])
 {
-	BOOL config_read = read_config(CONFIG_PATH);
+	BOOL config_read = read_config(DEFAULT_CONFIG_PATH);
 
 	/* parse args and set global vars as needed */
 	parse_args(argc, argv);
 
-	if(config_read)
-		log_message(STREAM_MAIN, MSG_GOOD, "Using config file: %s\n", CONFIG_PATH);
+	if (option_config_path != NULL)
+		config_read = read_config(option_config_path);
 
+	if (config_read)
+		log_message(STREAM_MAIN, MSG_GOOD, "Using config file: %s\n", option_config_path ? option_config_path : DEFAULT_CONFIG_PATH);
 
 	/* startup banner and args check */
 	log_message(STREAM_MAIN, MSG_GOOD, "Serial 2 Socket Relay version %s starting\n", SER2SOCK_VERSION);
