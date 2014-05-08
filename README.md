@@ -14,10 +14,21 @@ NOTE: The OpenSSL dev package is needed in order to compile with SSL support.
 3. sudo cp ser2sock /usr/local/bin/
 4. sudo cp -R etc/ser2sock /etc/
 5. Make changes to /etc/ser2sock/ser2sock.conf as needed.
-6. If using SSL generate certificates
-7. sudo cp init/ser2sock /etc/init.d/
-8. sudo update-rc.d ser2sock defaults
-9. sudo /etc/init.d/ser2sock start
+6. sudo cp init/ser2sock /etc/init.d/
+7. sudo update-rc.d ser2sock defaults
+8. sudo /etc/init.d/ser2sock start
+
+Installation (Mac OS X)
+=======================
+
+1. ./configure
+2. make
+3. sudo mkdir -p /usr/local/bin
+4. sudo cp ser2sock /usr/local/bin
+5. Change the 'device' setting in /etc/ser2sock/ser2sock.conf.
+6. sudo cp init/ser2sock.plist /System/Library/LaunchAgents/
+7. sudo launchctl load /System/Library/LaunchAgents/ser2sock.plist
+8. sudo launchctl start ser2sock
 
 Usage
 =====
@@ -33,7 +44,7 @@ options
   -i IP                     bind to a specific ip address; default is ALL
   -b baudrate               set baud rate; defaults to 9600
   -d                        daemonize
-  -0                        raw device mode no !SER2SOCK info messages
+  -0                        raw device mode - no info messages
   -t                        send terminal init string
   -g                        debug level 0-3
   -c                        keep incoming connections when a serial device is disconnected

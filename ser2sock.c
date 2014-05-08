@@ -415,7 +415,7 @@ void show_help(const char *appName)
 				"  -i IP                     bind to a specific ip address; default is ALL\n"
 				"  -b baudrate               set baud rate; defaults to 9600\n"
 				"  -d                        daemonize\n"
-				"  -0                        raw device mode no !SER2SOCK info messages\n"
+				"  -0                        raw device mode - no info messages\n"
 				"  -t                        send terminal init string\n"
 				"  -g                        debug level 0-3\n"
 				"  -c                        keep incoming connections when a serial device is disconnected\n"
