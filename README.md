@@ -28,8 +28,9 @@ Installation (Mac OS X)
 5. sudo cp -R etc/ser2sock /etc/
 6. Change the 'device' setting in /etc/ser2sock/ser2sock.conf.
 7. cp init/ser2sock.plist /System/Library/LaunchAgents/
-8. launchctl load /System/Library/LaunchAgents/ser2sock.plist
-9. launchctl start ser2sock
+8. cd ~
+9. launchctl load /System/Library/LaunchAgents/ser2sock.plist
+10. launchctl start ser2sock
 
 Usage
 =====
