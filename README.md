@@ -23,12 +23,13 @@ Installation (Mac OS X)
 
 1. ./configure
 2. make
-3. sudo mkdir -p /usr/local/bin
-4. sudo cp ser2sock /usr/local/bin
-5. Change the 'device' setting in /etc/ser2sock/ser2sock.conf.
-6. sudo cp init/ser2sock.plist /System/Library/LaunchAgents/
-7. sudo launchctl load /System/Library/LaunchAgents/ser2sock.plist
-8. sudo launchctl start ser2sock
+3. mkdir -p /usr/local/bin
+4. cp ser2sock /usr/local/bin
+5. sudo cp -R etc/ser2sock /etc/
+6. Change the 'device' setting in /etc/ser2sock/ser2sock.conf.
+7. cp init/ser2sock.plist /System/Library/LaunchAgents/
+8. launchctl load /System/Library/LaunchAgents/ser2sock.plist
+9. launchctl start ser2sock
 
 Usage
 =====
