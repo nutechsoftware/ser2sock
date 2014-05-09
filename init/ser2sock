@@ -1,5 +1,4 @@
 #!/bin/bash
-
 # SER2SOCK
 
 ### BEGIN INIT INFO
@@ -9,20 +8,37 @@
 # Required-Stop: $remote_fs
 # Default-Start: 2 3 4 5
 # Default-Stop: 0 1 6
-# Short-Description: init script for ser2sock
+# Short-Description: init script for ser2sock instantiation
 # Description: This is the initialization script for ser2sock.
 #
 ### END INIT INFO
 
-PORT=10000
-DEVICE=/dev/ttyAMA0
-BAUD=115200
 
-CONF=/etc/ser2sock/ser2sock.conf
+### Customization Instructions
+# 1. Change line 2 to the name you'll be using for this script
+# 2. Change the "Provides:" line to use the same name
+# 3. Save this new script using the new name
+# 4. Create a configuration file in /etc/ser2sock using 
+#    the script name: <script filename>.conf
+# 5. sudo cp <script filepath> /etc/init.d/
+# 6. sudo update-rc.d <script filename> defaults
+# 7. sudo /ect/init.d/<script filename> start
 
-ser2sock=/usr/local/bin/ser2sock
-prog=ser2sock
+
+### -----NO MODIFICATIONS REQUIRED BELOW THIS LINE------
+
+# Change this only if your executable has a different name
+PROGRAM_NAME="ser2sock"
+
+# Use the name of this script as the SCRIPT_NAME
+SCRIPT_NAME=${0##*/}
+
+CONF_FILE="/etc/ser2sock/${SCRIPT_NAME}.conf"
+EXECUTABLE="/usr/local/bin/${PROGRAM_NAME}"
+PID_FILE="/var/run/${SCRIPT_NAME}.pid"
+DAEMON_ARGS="-f ${CONF_FILE} -P ${PID_FILE}"
 RETVAL=0
+
 
 BOLD=$(tput bold)
 GREEN=$(tput setaf 2)
@@ -30,30 +46,56 @@ RED=$(tput setaf 1)
 NORMAL=$(tput sgr0)
 
 start() {
-    echo -n $"Starting $prog: "
+    echo
+    echo $"Starting instantiation ${BOLD}${SCRIPT_NAME}${NORMAL} of ${BOLD}${PROGRAM_NAME}${NORMAL}..."
+    echo
+    echo "Script name       : $SCRIPT_NAME"
+    echo "Executable file   : $EXECUTABLE"
+    echo "Arguments         : $DAEMON_ARGS"
+    echo "Configuration file: $CONF_FILE"
+    echo "PID file          : $PID_FILE"
+    echo
 
-    if [ ! -f $CONF ]; then
-        $ser2sock -d -c -p $PORT -s $DEVICE -b 115200 >/dev/null 2>&1
-    else
-        $ser2sock -d >/dev/null 2>&1
-    fi
+    start-stop-daemon --start  --pidfile $PID_FILE --exec $EXECUTABLE -- \
+        $DAEMON_ARGS >/dev/nul 2>&1
     RETVAL=$?
 
     if [ $RETVAL = 0 ]; then
-        echo "${BOLD}${GREEN}done${NORMAL}"
+        echo $"${BOLD}${GREEN}Started${NORMAL}"
     else
-        echo $"${BOLD}${RED}failed${NORMAL}"
+        echo $"${BOLD}${RED}Failed to start - Return Value = ${RETVAL}${NORMAL}"
     fi
 
+    echo
     return $RETVAL
 }
 
 stop() {
-    echo $"Stopping $prog.."
+    echo
+    echo $"Stopping instantiation ${BOLD}${SCRIPT_NAME}${NORMAL} of ${BOLD}${PROGRAM_NAME}${NORMAL}..."
+    echo
+    echo "Script name       : $SCRIPT_NAME"
+    echo "Executable file   : $EXECUTABLE"
+    echo "PID file          : $PID_FILE"
+    echo
 
-    killall $ser2sock
+    start-stop-daemon --stop --signal TERM --quiet --retry=TERM/10/KILL/5 --pidfile $PID_FILE \
+	--name $PROGRAM_NAME >/dev/nul 2>&1
     RETVAL=$?
 
+    if [ $RETVAL = 0 ]; then
+        echo $"${BOLD}${GREEN}Stopped${NORMAL}"
+    else 
+        if [ $RETVAL = 1 ]; then
+            echo $"${BOLD}${GREEN}Already stopped - Return Value = ${RETVAL}${NORMAL}"
+        else
+            echo $"${BOLD}${RED}Failed to stop - Return Value = ${RETVAL}${NORMAL}"
+        fi
+    fi
+
+#    rm -f $PID_FILE
+
+    echo
     return $RETVAL
 }
 
@@ -69,7 +111,7 @@ case "$1" in
         start
         ;;
     *)
-        echo $"Usage: $prog {start|stop|restart}"
+        echo $"Usage: $PROG_NAME {start|stop|restart}"
         exit 1
 esac
 
