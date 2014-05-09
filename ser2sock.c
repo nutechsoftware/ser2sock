@@ -1616,6 +1616,9 @@ int main(int argc, char *argv[])
 	if (config_read)
 		log_message(STREAM_MAIN, MSG_GOOD, "Using config file: %s\n", option_config_path);
 
+	/* Force arguments to override configuration file */
+	parse_args(argc, argv);
+
 	/* startup banner and args check */
 	log_message(STREAM_MAIN, MSG_GOOD, "Serial 2 Socket Relay version %s starting\n", SER2SOCK_VERSION);
 	if (!config_read && argc < 2)
