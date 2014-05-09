@@ -74,8 +74,8 @@ Using with more than one serial port (multiple daemon)
 5. Edit each of those files to reflect the serial device you are using and the
    network port it can be accessed through. Make sure it's a different port from
    the other instantiations and unused by anything else.
-5. For each new port do: sudo update-rc.d <script filename> defaults
-6. For each new port do: sudo /ect/init.d/<script filename> start
+6. For each new port do: sudo update-rc.d <script filename> defaults
+7. For each new port do: sudo /ect/init.d/<script filename> start
 
 
 Authentication via SSL
