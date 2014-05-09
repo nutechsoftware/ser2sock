@@ -4,6 +4,10 @@ ser2sock - Serial to Socket Redirector
 The ser2sock utility allows sharing of a serial device over a TCP/IP
 network.  It also supports encryption and authentication via OpenSSL.
 
+05/04/14 Version 1.4.5 adds better support for running more than one copy at a time
+on Linux system. init.d script rewritten to provide easy configuration for
+multiple instantiations and modifications to ser2sock.c to correct PID file
+creation/deletion behavior consistent with running more than one instantiation.
 
 Installation
 ============
@@ -18,6 +22,7 @@ NOTE: The OpenSSL dev package is needed in order to compile with SSL support.
 7. sudo cp init/ser2sock /etc/init.d/
 8. sudo update-rc.d ser2sock defaults
 9. sudo /etc/init.d/ser2sock start
+10. To run more than one instantiation follow instructions in the init/ser2sock script
 
 Usage
 =====
@@ -26,7 +31,7 @@ Usage
 Usage: ./ser2sock -p <socket listen port> -s <serial port dev>
 
   -h, -help                 display this help and exit
-  -f <config path>          override config file path
+  -f <config pathname>      override config file pathname
   -p port                   socket port to listen on
   -s <serial device>        serial device; ex /dev/ttyUSB0
 options
@@ -35,11 +40,30 @@ options
   -d                        daemonize
   -0                        raw device mode no !SER2SOCK info messages
   -t                        send terminal init string
+  -P <PID file pathname>    overide default PID file pathname. (for use by init.d script)
   -g                        debug level 0-3
   -c                        keep incoming connections when a serial device is disconnected
   -w milliseconds           delay between attempts to open a serial device (5000)
   -e                        use SSL to encrypt the connection
 ```
+
+Using with more than one serial port (multiple daemon)
+======================================================
+
+1. Follow basic installation instructions above.
+2. Make an additional copy of the /etc/init.d/ser2sock scrip for each serial
+   port you wish to use but use a unique filename such as /etc/init.d/ser2sock.1 ,
+   ser2sock.2 , etc.
+3. Edit each file and change the "Provides:" line to use the same name that you
+   gave the file: ser2sock.1 (for example)
+4. Create a new configuration file in /etc/ser2sock using the same name that you
+   gave the init.d script for the corresponding port: ser2sock.1.conf (example)
+5. Edit each of those files to reflect the serial device you are using and the
+   network port it can be accessed through. Make sure it's a different port from
+   the other instantiations and unused by anything else.
+5. For each new port do: sudo update-rc.d <script filename> defaults
+6. For each new port do: sudo /ect/init.d/<script filename> start
+
 
 Authentication via SSL
 ======================

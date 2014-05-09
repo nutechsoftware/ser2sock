@@ -1,3 +1,23 @@
+
+v1.4.5 - 05/04/14 - Ron Curry, InSyte Technologies 
+	- ser2sock - Rewrote init.d script to easily accomodate multiple instances           
+	and added additional error checking and reporting.
+	- ser2sock.c - Added "-P" option to allow optionally specify PID pathname
+	  to better support running mulitple instantiations via scripts.        
+	  Prior to this  ser2sock would simply overwrite any previous PID file in
+	  /var/run
+	- ser2sock.c - Added code to delete PID file apon exit
+	- ser2sock.c - Changed logic which caused reading of a potentially non-
+	  existent default config file prior to reading command line arguments          
+	  and prior to a specified config and fixed error reporting.
+	  Now it only read the correct file once after considering cmdline args
+	- ser2sock.c - Added "PID_FILE" keyword/option to config file support
+	  Not needed for current init.d support but may be useful to some
+	- Added trivial code to delete the /var/run/<PID_FILE> upon exit.
+	- ser2sock.c - Added several additional syslog write to aid in debugging
+	- ser2sock.c - Changed ser2sock version to 1.4.5 to reflect above changes
+	  Version 1.4.5 should remain fully compatible with 1.4.4 behaviour
+
 v1.4.4 - 10/25/13
     Refactored main state machine, logging, cleanup.
 

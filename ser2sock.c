@@ -21,6 +21,9 @@
  *  DEVELOPED BY: Sean Mathews
  *                http://www.nutech.com/
  *
+ *                http://www.nutech.com/
+ *
+ *
  *     Thanks to Richard Perlman [ad2usb at perlman.com] for his help testing on
  *     bsd and excellent feedback on features. Also a big thanks to everyone
  *     that helped support the AD2USB project get off the ground.
@@ -61,7 +64,7 @@
 #include <openssl/err.h>
 #endif
 
-#define SER2SOCK_VERSION "V1.4.4"
+#define SER2SOCK_VERSION "V1.4.5"
 #define TRUE 1
 #define FALSE 0
 
@@ -237,15 +240,16 @@ struct sockaddr_in serv_addr;
 struct sockaddr_in peer_addr;
 // fifo buffer
 fifo data_buffer;
-char * option_config_path = 0;
-char * option_bind_ip = 0;
-char * option_baud_rate = 0;
+char * option_config_path = NULL;
+char * option_bind_ip = NULL;
+char * option_baud_rate = NULL;
 BOOL option_daemonize = FALSE;
 BOOL option_raw_device_mode = FALSE;
 BOOL option_send_terminal_init = FALSE;
 int option_debug_level = 0;
 BOOL option_keep_connection = FALSE;
 int option_open_serial_delay = 5000;
+char * option_pid_file = NULL;
 int serial_connected = 0;
 struct timeval tv_serial_start, tv_last_serial_check;
 
@@ -675,6 +679,8 @@ int init_serial_fd(char * szPortPath)
 	tcsetattr(fd, TCSANOW, &newtio);
 	if (option_debug_level > 2)
 		print_serial_fd_status(fd);
+
+	log_message(STREAM_MAIN, MSG_GOOD, "Set speed successful\n");
 
 	return 1;
 }
@@ -1525,6 +1531,10 @@ int parse_args(int argc, char * argv[])
 				case 'd':
 					option_daemonize = TRUE;
 					break;
+				case 'P':
+                                        skip = skip_param(&loc_argv[1][0]);
+                                        option_pid_file = &loc_argv[1][skip];
+                                        break;
 				case '0':
 					option_raw_device_mode = TRUE;
 					break;
@@ -1562,12 +1572,6 @@ int parse_args(int argc, char * argv[])
 		--loc_argc;
 	}
 
-	if (serial_device_name == 0)
-	{
-		show_help(argv[0]);
-		log_message(STREAM_MAIN, MSG_BAD, "Error missing serial device name exiting\n");
-		exit(EXIT_FAILURE);
-	}
 	return TRUE;
 }
 
@@ -1578,16 +1582,22 @@ static void writepid(void)
 {
 	int fd;
 	char buff[20];
-	if ((fd = open(PID_FILE, O_CREAT | O_WRONLY, 0600)) >= 0)
+
+	if (option_pid_file == NULL)
+		option_pid_file = PID_FILE;
+
+	if ((fd = open(option_pid_file, O_CREAT | O_WRONLY, 0600)) >= 0)
 	{
 		snprintf(buff, 20, "%d\n", (int) getpid());
 		if (write(fd, buff, strlen(buff)) == -1)
-			log_message(STREAM_MAIN, MSG_WARN, "Error writing to pid file %s\n", PID_FILE);
+			log_message(STREAM_MAIN, MSG_WARN, "Error writing to pid file %s\n", option_pid_file);
+		else
+			log_message(STREAM_MAIN, MSG_GOOD, "Using PID file: %s\n", option_pid_file);
+
 		close(fd);
-		return;
 	}
 	else
-		log_message(STREAM_MAIN, MSG_WARN, "Error opening pid file %s\n", PID_FILE);
+		log_message(STREAM_MAIN, MSG_WARN, "Error opening pid file %s\n", option_pid_file);
 }
 
 /*
@@ -1595,16 +1605,19 @@ static void writepid(void)
  */
 int main(int argc, char *argv[])
 {
-	BOOL config_read = read_config(DEFAULT_CONFIG_PATH);
+	BOOL config_read;
 
 	/* parse args and set global vars as needed */
 	parse_args(argc, argv);
 
-	if (option_config_path != NULL)
-		config_read = read_config(option_config_path);
+	if (option_config_path == NULL)
+		option_config_path = DEFAULT_CONFIG_PATH;
+
+	config_read = read_config(option_config_path);
 
 	if (config_read)
-		log_message(STREAM_MAIN, MSG_GOOD, "Using config file: %s\n", option_config_path ? option_config_path : DEFAULT_CONFIG_PATH);
+		log_message(STREAM_MAIN, MSG_GOOD, "Using config file: %s\n", option_config_path);
+
 
 	/* startup banner and args check */
 	log_message(STREAM_MAIN, MSG_GOOD, "Serial 2 Socket Relay version %s starting\n", SER2SOCK_VERSION);
@@ -1614,6 +1627,15 @@ int main(int argc, char *argv[])
 		log_message(STREAM_MAIN, MSG_BAD, "ERROR insufficient arguments\n");
 		exit(EXIT_FAILURE);
 	}
+
+        if (serial_device_name == NULL)
+        {
+                show_help(argv[0]);
+                log_message(STREAM_MAIN, MSG_BAD, "Error missing serial device name exiting\n");
+                exit(EXIT_FAILURE);
+        }
+
+
 
 	/* initialize the system */
 	init_system();
@@ -1683,6 +1705,9 @@ int main(int argc, char *argv[])
 		closelog();
 	}
 
+	/* Delete the pid file */
+	unlink (option_pid_file);
+
 	return 0;
 }
 
@@ -1702,6 +1727,11 @@ void signal_handler(int sig)
 			log_message(STREAM_MAIN, MSG_GOOD, "Cleaning up\n");
 			free_system();
 			log_message(STREAM_MAIN, MSG_GOOD, "done.\n");
+
+
+			/* Delete the  PID file we created */
+			unlink(option_pid_file);
+
 			exit(EXIT_SUCCESS);
 			break;
 		default:
@@ -1801,7 +1831,10 @@ BOOL read_config(char* filename)
 						{
 							option_open_serial_delay = atoi(optdata);
 						}
-
+						else if (!strcmp(opt, "pid_file"))
+						{
+							option_pid_file = strdup(optdata);
+						}
 #ifdef HAVE_LIBSSL
 						else if (!strcmp(opt, "encrypted"))
 						{
