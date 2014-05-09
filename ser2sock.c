@@ -21,8 +21,6 @@
  *  DEVELOPED BY: Sean Mathews
  *                http://www.nutech.com/
  *
- *                http://www.nutech.com/
- *
  *
  *     Thanks to Richard Perlman [ad2usb at perlman.com] for his help testing on
  *     bsd and excellent feedback on features. Also a big thanks to everyone
@@ -215,7 +213,7 @@ void shutdown_ssl();
 void shutdown_ssl_conn(BIO* sslbio);
 #ifdef SSL_DEBUGGING
 long    tls_bio_dump_cb(BIO *bio, int cmd, const char *argp, int argi,
-			        long unused_argl, long ret);
+					long unused_argl, long ret);
 void apps_ssl_info_callback(const SSL *s, int where, int ret);
 void ssl_msg_callback(int write_p, int version, int content_type,
 		 const void *buf, size_t len, SSL * ssl, void *arg);
@@ -340,7 +338,7 @@ void vlog_message(int s,int type, char *msg, va_list arg)
 							if (type) {
 
 								syslog(syslog_format_type_priority[type], "%s%s",
-								       syslog_format_type_strings[type], ls[s].message);
+									   syslog_format_type_strings[type], ls[s].message);
 							}
 							else
 								syslog(LOG_INFO, "%s", ls[s].message);
@@ -1008,7 +1006,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 						if (BIO_do_accept(abio) <= 0)
 						{
 							log_message(STREAM_MAIN, MSG_BAD, "SSL BIO_do_accept failed: %s\n",
-								    ERR_error_string(ERR_get_error(), NULL));
+									ERR_error_string(ERR_get_error(), NULL));
 						} else
 						{
 							// try and grab our actual working BIO.
@@ -1017,7 +1015,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 							if (!newbio)
 							{
 								log_message(STREAM_MAIN, MSG_BAD, "SSL BIO_pop failed: %s\n",
-								    ERR_error_string(ERR_get_error(), NULL));
+									ERR_error_string(ERR_get_error(), NULL));
 							} else
 							{
 								/* get our fd from the BIO */
@@ -1045,7 +1043,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 									if (!BIO_should_retry(newbio))
 									{
 										log_message(STREAM_MAIN, MSG_BAD, "SSL handshake failed with no retry: %s\n",
-											    ERR_error_string(ERR_get_error(), NULL));
+												ERR_error_string(ERR_get_error(), NULL));
 										shutdown_ssl_conn(newbio);
 										close(newsockfd);
 									} else
@@ -1105,14 +1103,14 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 #endif
 								close(newsockfd);
 								if(added_slot == -1)
-								log_message(STREAM_MAIN, MSG_WARN, "Socket refused because no more space\n");
+									log_message(STREAM_MAIN, MSG_WARN, "Socket refused because no more space\n");
 							}
 						}
 						else
 						{
 #ifdef HAVE_LIBSSL
 							if (newbio != NULL)
-							      shutdown_ssl_conn(newbio);
+								shutdown_ssl_conn(newbio);
 #endif
 							close(newsockfd);
 							log_message(STREAM_MAIN, MSG_WARN, "Socket refused because serial is not connected\n");
@@ -1261,7 +1259,7 @@ BOOL poll_write_fdset(fd_set *write_fdset)
 								if (!BIO_should_retry(my_fds[n].ssl))
 								{
 									log_message(STREAM_MAIN, MSG_BAD, "SSL handshake failed with no retry: %s\n",
-										    ERR_error_string(ERR_get_error(), NULL));
+											ERR_error_string(ERR_get_error(), NULL));
 									cleanup_fd(n);
 								}
 							} else
@@ -1532,9 +1530,9 @@ int parse_args(int argc, char * argv[])
 					option_daemonize = TRUE;
 					break;
 				case 'P':
-                                        skip = skip_param(&loc_argv[1][0]);
-                                        option_pid_file = &loc_argv[1][skip];
-                                        break;
+					skip = skip_param(&loc_argv[1][0]);
+					option_pid_file = &loc_argv[1][skip];
+					break;
 				case '0':
 					option_raw_device_mode = TRUE;
 					break;
@@ -1618,7 +1616,6 @@ int main(int argc, char *argv[])
 	if (config_read)
 		log_message(STREAM_MAIN, MSG_GOOD, "Using config file: %s\n", option_config_path);
 
-
 	/* startup banner and args check */
 	log_message(STREAM_MAIN, MSG_GOOD, "Serial 2 Socket Relay version %s starting\n", SER2SOCK_VERSION);
 	if (!config_read && argc < 2)
@@ -1628,14 +1625,12 @@ int main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 
-        if (serial_device_name == NULL)
-        {
-                show_help(argv[0]);
-                log_message(STREAM_MAIN, MSG_BAD, "Error missing serial device name exiting\n");
-                exit(EXIT_FAILURE);
-        }
-
-
+	if (serial_device_name == NULL)
+	{
+		show_help(argv[0]);
+		log_message(STREAM_MAIN, MSG_BAD, "Error missing serial device name exiting\n");
+		exit(EXIT_FAILURE);
+	}
 
 	/* initialize the system */
 	init_system();
@@ -1706,7 +1701,7 @@ int main(int argc, char *argv[])
 	}
 
 	/* Delete the pid file */
-	unlink (option_pid_file);
+	unlink(option_pid_file);
 
 	return 0;
 }
@@ -1727,7 +1722,6 @@ void signal_handler(int sig)
 			log_message(STREAM_MAIN, MSG_GOOD, "Cleaning up\n");
 			free_system();
 			log_message(STREAM_MAIN, MSG_GOOD, "done.\n");
-
 
 			/* Delete the  PID file we created */
 			unlink(option_pid_file);
@@ -2224,17 +2218,17 @@ void ssl_msg_callback(int write_p, int version, int content_type,
 
 }
 
-long    tls_bio_dump_cb(BIO *bio, int cmd, const char *argp, int argi,
+long tls_bio_dump_cb(BIO *bio, int cmd, const char *argp, int argi,
 			long unused_argl, long ret)
 {
 	if (cmd == (BIO_CB_READ | BIO_CB_RETURN)) {
 		log_message(STREAM_MAIN, MSG_WARN,
-		    "read from %08lX [%08lX] (%d bytes => %ld (0x%lX))\n",
+			"read from %08lX [%08lX] (%d bytes => %ld (0x%lX))\n",
 		 (unsigned long) bio, (unsigned long) argp, argi,
 		 ret, (unsigned long) ret);
 	} else if (cmd == (BIO_CB_WRITE | BIO_CB_RETURN)) {
 	log_message(STREAM_MAIN, MSG_WARN,
-		    "write to %08lX [%08lX] (%d bytes => %ld (0x%lX))\n",
+			"write to %08lX [%08lX] (%d bytes => %ld (0x%lX))\n",
 		 (unsigned long) bio, (unsigned long) argp, argi,
 		 ret, (unsigned long) ret);
 	}
