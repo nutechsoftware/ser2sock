@@ -62,7 +62,7 @@
 #include <openssl/err.h>
 #endif
 
-#define SER2SOCK_VERSION "V1.4.5"
+#define SER2SOCK_VERSION "V1.5.2"
 #define TRUE 1
 #define FALSE 0
 
