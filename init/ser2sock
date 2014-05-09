@@ -18,7 +18,7 @@
 # 1. Change line 2 to the name you'll be using for this script
 # 2. Change the "Provides:" line to use the same name
 # 3. Save this new script using the new name
-# 4. Create a configuration file in /etc/ser2sock using 
+# 4. Create a configuration file in /etc/ser2sock using
 #    the script name: <script filename>.conf
 # 5. sudo cp <script filepath> /etc/init.d/
 # 6. sudo update-rc.d <script filename> defaults
@@ -57,7 +57,7 @@ start() {
     echo
 
     start-stop-daemon --start  --pidfile $PID_FILE --exec $EXECUTABLE -- \
-        $DAEMON_ARGS >/dev/nul 2>&1
+        $DAEMON_ARGS >/dev/null 2>&1
     RETVAL=$?
 
     if [ $RETVAL = 0 ]; then
@@ -80,12 +80,12 @@ stop() {
     echo
 
     start-stop-daemon --stop --signal TERM --quiet --retry=TERM/10/KILL/5 --pidfile $PID_FILE \
-	--name $PROGRAM_NAME >/dev/nul 2>&1
+	--name $PROGRAM_NAME >/dev/null 2>&1
     RETVAL=$?
 
     if [ $RETVAL = 0 ]; then
         echo $"${BOLD}${GREEN}Stopped${NORMAL}"
-    else 
+    else
         if [ $RETVAL = 1 ]; then
             echo $"${BOLD}${GREEN}Already stopped - Return Value = ${RETVAL}${NORMAL}"
         else
