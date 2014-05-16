@@ -410,7 +410,7 @@ void show_help(const char *appName)
 			stderr,
 			"Usage: %s -p <socket listen port> -s <serial port dev>\n\n"
 				"  -h, -help                 display this help and exit\n"
-				"  -f <config path>          override config file path\n"
+				"  -f <config path>          override config file path and name\n"
 				"  -p port                   socket port to listen on\n"
 				"  -s <serial device>        serial device; ex /dev/ttyUSB0\n"
 				"options\n"
@@ -419,6 +419,7 @@ void show_help(const char *appName)
 				"  -d                        daemonize\n"
 				"  -0                        raw device mode - no info messages\n"
 				"  -t                        send terminal init string\n"
+				"  -P <pid pathname>         override default PID file path and name\n"
 				"  -g                        debug level 0-3\n"
 				"  -c                        keep incoming connections when a serial device is disconnected\n"
 				"  -w milliseconds           delay between attempts to open a serial device (5000)\n"
