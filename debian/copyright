@@ -1,39 +1,12 @@
 Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: ser2sock
+Upstream-Contact: support@nutech.com
 Source: https://github.com/nutechsoftware/ser2sock
 
 Files: *
 Copyright: 2010 Sean Mathews <coder@f34r.com>
            2013 Scott Petersen <scott@digression.org>
 License: GPL-3
- Copyright (C) 1996, 1997, 1998, 1999, 2000, 2001, 2006 Free Software Foundation, Inc.
- 
- Permission is granted to anyone to make or distribute verbatim copies
- of this document as received, in any medium, provided that the
- copyright notice and this permission notice are preserved,
- thus giving the recipient permission to redistribute in turn.
- 
- Permission is granted to distribute modified versions
- of this document, or of portions of it,
- under the above conditions, provided also that they
- carry prominent notices stating who last changed them.
-
-Files: debian/*
-Copyright: 2014 Lionel Ains <lains@gmx.net>
-License: GPL-2+
- This package is free software; you can redistribute it and/or modify
- it under the terms of the GNU General Public License as published by
- the Free Software Foundation; either version 2 of the License, or
- (at your option) any later version.
- .
- This package is distributed in the hope that it will be useful,
- but WITHOUT ANY WARRANTY; without even the implied warranty of
- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- GNU General Public License for more details.
- .
- You should have received a copy of the GNU General Public License
- along with this program. If not, see <http://www.gnu.org/licenses/>
- .
- On Debian systems, the complete text of the GNU General
- Public License version 2 can be found in "/usr/share/common-licenses/GPL-2".
+ The full text of the GNU General Public License version 3 is available on
+ Debian systems in /usr/share/common-licenses/GPL-3.
 
