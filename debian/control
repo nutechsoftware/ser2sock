@@ -1,0 +1,17 @@
+Source: ser2sock
+Section: comm
+Priority: extra
+Maintainer: Lionel Ains <lains@gmx.net>
+Build-Depends: debhelper (>= 8.0.0), autotools-dev, libssl-dev
+Standards-Version: 3.9.3
+Homepage: https://github.com/nutechsoftware/ser2sock
+#Vcs-Git: git://git.debian.org/collab-maint/ser2sock.git
+#Vcs-Browser: http://git.debian.org/?p=collab-maint/ser2sock.git;a=summary
+
+Package: ser2sock
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, libssl1.0.0
+Recommends: openssl
+Description: Serial to Socket Redirector
+ The ser2sock utility allows sharing of a serial device over a TCP/IP
+ network.  It also supports encryption and authentication via OpenSSL.

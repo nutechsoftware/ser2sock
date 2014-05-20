@@ -1,0 +1,5 @@
+ser2sock (1.4.4-1) unstable; urgency=low
+
+  * Initial release (Closes: #nnnn)  <nnnn is the bug number of your ITP>
+
+ -- Lionel Ains <lains@gmx.net>  Tue, 22 Apr 2014 14:11:17 +0200
