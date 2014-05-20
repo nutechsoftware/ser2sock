@@ -23,6 +23,16 @@ NOTE: The OpenSSL dev package is needed in order to compile with SSL support.
 8. sudo /etc/init.d/ser2sock start
 9. To run more than one instantiation follow instructions in the init/ser2sock script
 
+Installation (Debian/Ubuntu)
+============================
+
+1. sudo apt-get install build-essential autotools-dev
+2. debuild -i -us -uc -b
+3. sudo dpkg -i ../ser2sock*.deb
+4. sudo update-rc.d ser2sock defaults
+5. sudo /etc/init.d/ser2sock start
+6. To run more than one instantiation follow instructions in the /etc/init.d/ser2sock script
+
 Installation (Mac OS X)
 =======================
 
@@ -64,7 +74,7 @@ Using with more than one serial port (multiple daemon)
 ======================================================
 
 1. Follow basic installation instructions above.
-2. Make an additional copy of the /etc/init.d/ser2sock scrip for each serial
+2. Make an additional copy of the /etc/init.d/ser2sock script for each serial
    port you wish to use but use a unique filename such as /etc/init.d/ser2sock.1 ,
    ser2sock.2 , etc.
 3. Edit each file and change the "Provides:" line to use the same name that you
