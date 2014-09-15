@@ -26,7 +26,7 @@ NOTE: The OpenSSL dev package is needed in order to compile with SSL support.
 Installation (Debian/Ubuntu)
 ============================
 
-1. sudo apt-get install build-essential autotools-dev
+1. sudo apt-get install build-essential autotools-dev devscripts
 2. debuild -i -us -uc -b
 3. sudo dpkg -i ../ser2sock*.deb
 4. sudo update-rc.d ser2sock defaults
