@@ -1413,7 +1413,7 @@ void listen_loop()
 		   next go round will be idle too
 		*/
 		if (!did_work)
-			msleep(20);
+			msleep(5);
 	}
 
 	log_message(STREAM_MAIN, MSG_NONE, "\n");
@@ -1816,7 +1816,7 @@ BOOL read_config(char* filename)
 						else if (!strcmp(opt, "raw_device_mode"))
 						{
 							option_raw_device_mode = atoi(optdata);
-						}						
+						}
 						else if (!strcmp(opt, "send_terminal_init"))
 						{
 							option_send_terminal_init = atoi(optdata);
@@ -1966,15 +1966,15 @@ void fifo_clear(fifo *f)
  if len is 0 it will be calculated using strlen() so NULL chars in the
  stream will be excluded and thus not true binary. For binary and to include
  NULL values in the stream len must be > 0.
- 
- note: 
+
+ note:
 	this has a specific type where all the other fifo low level routines
 	are all void *.
  */
 void* fifo_make_buffer(void *in_buffer, unsigned int len)
 {
 	fifo_buffer* out_buffer;
-	
+
 	// Calcualte the buffer size as a string not including the null terminator
 	if (!len) {
 		len = strlen(in_buffer);
@@ -2082,7 +2082,7 @@ BOOL init_ssl()
 
 	if (X509_load_crl_file(lookup, option_ssl_crl, X509_FILETYPE_PEM))
 	{
-		X509_STORE_set_flags(store, X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL);		
+		X509_STORE_set_flags(store, X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL);
 	}
 
 	// Set everything up to serve.
