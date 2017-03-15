@@ -7,3 +7,5 @@
 7. sudo cp init/ser2sock /etc/init.d/
 8. sudo update-rc.d ser2sock defaults
 9. sudo /etc/init.d/ser2sock start
+
+or on Ubuntu/Debian follow the instructions detailed in the file README to build a .deb package
