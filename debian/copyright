@@ -1,0 +1,12 @@
+Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: ser2sock
+Upstream-Contact: support@nutech.com
+Source: https://github.com/nutechsoftware/ser2sock
+
+Files: *
+Copyright: 2010 Sean Mathews <coder@f34r.com>
+           2013 Scott Petersen <scott@digression.org>
+License: GPL-3
+ The full text of the GNU General Public License version 3 is available on
+ Debian systems in /usr/share/common-licenses/GPL-3.
+
