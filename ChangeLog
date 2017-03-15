@@ -1,3 +1,7 @@
+v1.5.3 - 03/15/17
+    Lowered sleep duration in our main loop to increase throughput.
+    Better Debian script setup and build instruction fixes.  Thanks Lionel!
+
 v1.5.2 - 05/04/14 - Ron Curry, InSyte Technologies
     Rewrote init.d script to easily accomodate multiple instances
         and added additional error checking and reporting.
