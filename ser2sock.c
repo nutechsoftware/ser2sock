@@ -1131,6 +1131,7 @@ BOOL poll_read_fdset(fd_set *read_fdset)
 							{
 								did_work = TRUE;
 								add_to_all_socket_fds(buffer, received);
+                                buffer[received] = 0;
 								if (option_debug_level > 1)
 								{
 									if (option_debug_level > 2)
