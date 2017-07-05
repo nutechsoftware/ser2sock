@@ -1,3 +1,8 @@
+v1.5.4 - 07/05/17
+    Fixed a termination issue while debug logging.
+    Updated configure scripts to use SSL_CTX_new instead of SSL_library_init to support OpenSSL 1.1
+    Added a systemd script.
+
 v1.5.3 - 03/15/17
     Lowered sleep duration in our main loop to increase throughput.
     Better Debian script setup and build instruction fixes.  Thanks Lionel!
