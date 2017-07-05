@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.69])
-AC_INIT(ser2sock, 1.4.4, general@support.nutech.com)
+AC_INIT(ser2sock, 1.5.4, general@support.nutech.com)
 AC_CONFIG_SRCDIR([ser2sock.c])
 AM_INIT_AUTOMAKE
 AC_CONFIG_HEADERS([config.h])
@@ -14,7 +14,7 @@ AC_PROG_CC
 AC_ARG_WITH([ssl], [AS_HELP_STRING([--without-ssl], [disable support for OpenSSL])], [], [with_ssl=yes])
 
 AS_IF([test "x$with_ssl" != xno],
-		[AC_CHECK_LIB([ssl], [SSL_library_init], [], [AC_MSG_FAILURE([ssl test failed (--without-ssl to disable)])])])
+		[AC_CHECK_LIB([ssl], [SSL_CTX_new], [], [AC_MSG_FAILURE([ssl test failed (--without-ssl to disable)])])])
 
 AS_IF([test "x$with_ssl" != xno],
 		[AC_CHECK_LIB([crypto], [BIO_pop], [], [AC_MSG_FAILURE([ssl test failed (--without-ssl to disable)])])])

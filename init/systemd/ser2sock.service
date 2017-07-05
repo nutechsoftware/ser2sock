@@ -1,0 +1,11 @@
+[Unit]
+Description=Proxy that allows tcp connections to serial ports
+After=syslog.target network.target
+
+[Service]
+Type=forking
+ExecStart=/usr/local/bin/ser2sock -d
+ExecReload=/bin/kill -HUP $MAINPID
+
+[Install]
+WantedBy=multi-user.target
