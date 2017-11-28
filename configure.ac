@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.69])
-AC_INIT(ser2sock, 1.5.4, general@support.nutech.com)
+AC_INIT(ser2sock, 1.5.5, general@support.nutech.com)
 AC_CONFIG_SRCDIR([ser2sock.c])
 AM_INIT_AUTOMAKE
 AC_CONFIG_HEADERS([config.h])
