@@ -31,12 +31,15 @@ PROGRAM_NAME="ser2sock"
 # Use the name of this script as the SCRIPT_NAME
 SCRIPT_NAME=${0##*/}
 
+# Uncoment next line to set user to run daemon as. Best to be a real user like "pi:pi".
+#RUN_AS="root:root"
+
 CONF_FILE="/etc/ser2sock/${SCRIPT_NAME}.conf"
 EXECUTABLE="/usr/local/bin/${PROGRAM_NAME}"
-PID_FILE="/var/run/${SCRIPT_NAME}.pid"
+PID_FILE="/var/run/${PROGRAM_NAME}/${SCRIPT_NAME}.pid"
 
-#EXTRA_START_ARGS="--chuid pi:pi"
 EXTRA_START_ARGS=""
+
 DAEMON_ARGS="-d -f ${CONF_FILE} -P ${PID_FILE}"
 RETVAL=0
 
@@ -44,6 +47,26 @@ BOLD=$(tput bold)
 GREEN=$(tput setaf 2)
 RED=$(tput setaf 1)
 NORMAL=$(tput sgr0)
+
+# PID folder sanity check. /var/run may be a tmp file system so we need to check.
+if [ ! -d /var/run/${PROGRAM_NAME} ]; then
+    mkdir /var/run/${PROGRAM_NAME} 2>/dev/null
+    if [ $? -ne 0 ]; then
+        echo $"${BOLD}${RED}Failed to create PID folder '/var/run/${PROGRAM_NAME}/'"
+        exit 1
+    fi
+fi
+
+# Are we running as a specific user? If so then we need the correct permissions.
+if [ -n "${RUN_AS}" ]; then
+    EXTRA_START_ARGS+=" --chuid ${RUN_AS}"
+    # Set permissions to pid folder for the user
+    chown ${RUN_AS} /var/run/${PROGRAM_NAME} 2>/dev/null
+    if [ $? -ne 0 ]; then
+        echo $"${BOLD}${RED}Failed to set PID folder '/var/run/${PROGRAM_NAME}/' owner to '${RUN_AS}'"
+        exit 1
+    fi
+fi
 
 start() {
     echo
