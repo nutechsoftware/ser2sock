@@ -37,9 +37,7 @@ SCRIPT_NAME=${0##*/}
 CONF_FILE="/etc/ser2sock/${SCRIPT_NAME}.conf"
 EXECUTABLE="/usr/local/bin/${PROGRAM_NAME}"
 PID_FILE="/var/run/${PROGRAM_NAME}/${SCRIPT_NAME}.pid"
-
 EXTRA_START_ARGS=""
-
 DAEMON_ARGS="-d -f ${CONF_FILE} -P ${PID_FILE}"
 RETVAL=0
 
