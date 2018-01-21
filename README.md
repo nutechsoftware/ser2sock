@@ -4,7 +4,9 @@ ser2sock - Serial to Socket Redirector
 The ser2sock utility allows sharing of a serial device over a TCP/IP
 network.  It also supports encryption and authentication via OpenSSL.
 
-05/04/14 Version 1.4.5 adds better support for running more than one copy at a time
+If you need Windows support: check out LuckyMallari's [com-socket-bridge](https://github.com/LuckyMallari/com-socket-bridge).
+
+05/04/14 - Version 1.4.5 adds better support for running more than one copy at a time
 on Linux system. init.d script rewritten to provide easy configuration for
 multiple instantiations and modifications to ser2sock.c to correct PID file
 creation/deletion behavior consistent with running more than one instantiation.
