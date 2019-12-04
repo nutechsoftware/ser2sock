@@ -3760,7 +3760,7 @@ if ${ac_cv_lib_crypto_BIO_pop+:} false; then :
   $as_echo_n "(cached) " >&6
 else
   ac_check_lib_save_LIBS=$LIBS
-LIBS="-lcrypto  $LIBS"
+LIBS="$LIBS -lcrypto"
 cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -3795,7 +3795,7 @@ if test "x$ac_cv_lib_crypto_BIO_pop" = xyes; then :
 #define HAVE_LIBCRYPTO 1
 _ACEOF
 
-  LIBS="-lcrypto $LIBS"
+  LIBS="$LIBS -lcrypto"
 
 else
   { { $as_echo "$as_me:${as_lineno-$LINENO}: error: in \`$ac_pwd':" >&5
