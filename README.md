@@ -30,11 +30,12 @@ Installation (Debian/Ubuntu)
 ============================
 
 1. sudo apt-get install build-essential autotools-dev devscripts
-2. debuild -i -us -uc -b
-3. sudo dpkg -i ../ser2sock*.deb
-4. sudo update-rc.d ser2sock defaults
-5. sudo /etc/init.d/ser2sock start
-6. To run more than one instantiation follow instructions in the /etc/init.d/ser2sock script
+2. autoreconf -f -i
+3. debuild -i -us -uc -b
+4. sudo dpkg -i ../ser2sock*.deb
+5. sudo update-rc.d ser2sock defaults
+6. sudo /etc/init.d/ser2sock start
+7. To run more than one instantiation follow instructions in the /etc/init.d/ser2sock script
 
 Installation (Mac OS X)
 =======================
